@@ -1,13 +1,13 @@
-
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useCallback } from "react";
 import { Warrior } from "@/data/warriors";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { toast } from "sonner";
-import { RefreshCw, Send } from "lucide-react";
+import { RefreshCw, Send, PauseCircle, PlayCircle } from "lucide-react";
+import { createChatCompletion, createWarriorSystemPrompt, createContinuousConversationPrompt, getWarriorWisdom, moderateUserMessage } from "@/services/openai";
 
 interface Message {
-  warrior: string | "user";
+  warrior: string | "user" | "system";
   content: string;
   timestamp: Date;
 }
@@ -22,50 +22,219 @@ export const ChatInterface = ({ warriors, topic, onBack }: ChatInterfaceProps) =
   const [messages, setMessages] = useState<Message[]>([]);
   const [userInput, setUserInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
+  const [conversationPaused, setConversationPaused] = useState(false);
+  const [nextWarriorIndex, setNextWarriorIndex] = useState(0);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   
-  // Mock chat simulation - this would be replaced by actual OpenAI API calls
+  // Track if we're waiting for API responses to avoid multiple simultaneous calls
+  const isProcessingRef = useRef(false);
+  
+  // Create map of warrior contexts for the OpenAI prompts
+  const warriorContexts = useRef<Record<string, any>>({});
+  
+  const [typingWarrior, setTypingWarrior] = useState<string | null>(null);
+  
+  const [conversationMemory, setConversationMemory] = useState<{
+    overallSummary: string;
+    recentMessages: Message[];
+  }>({
+    overallSummary: "",
+    recentMessages: []
+  });
+  
   useEffect(() => {
+    // Initialize warrior contexts
+    const contexts: Record<string, any> = {};
+    warriors.forEach(warrior => {
+      contexts[warrior.id] = {
+        systemPrompt: createWarriorSystemPrompt(warrior, topic),
+        warrior: warrior
+      };
+    });
+    warriorContexts.current = contexts;
+    
+    // Initialize chat with welcome message
     const initialMessage: Message = {
       warrior: "system",
-      content: `Welcome! Today's discussion topic: "${topic}"`,
+      content: `Welcome to a discussion on "${topic}" with historical warriors`,
       timestamp: new Date()
     };
     
     setMessages([initialMessage]);
     
-    // Simulate initial responses from warriors
-    const initialResponses = warriors.map((warrior) => ({
-      warrior: warrior.id,
-      content: getInitialResponse(warrior, topic),
-      timestamp: new Date(Date.now() + Math.random() * 2000)
-    }));
-    
-    const sortedResponses = initialResponses.sort((a, b) => 
-      a.timestamp.getTime() - b.timestamp.getTime()
-    );
-    
-    // Stagger the messages to simulate real conversation
-    sortedResponses.forEach((msg, index) => {
-      setTimeout(() => {
-        setMessages(prev => [...prev, msg]);
-      }, (index + 1) * 1500);
-    });
+    // Start the initial warrior responses
+    startInitialResponses();
   }, [warriors, topic]);
+  
+  const startInitialResponses = async () => {
+    setIsLoading(true);
+    isProcessingRef.current = true;
+    
+    try {
+      // Get the first warrior to respond
+      const firstWarrior = warriors[0];
+      const initialResponse = await getWarriorResponse(firstWarrior, [], topic);
+      
+      const firstMessage: Message = {
+        warrior: firstWarrior.id,
+        content: initialResponse,
+        timestamp: new Date()
+      };
+      
+      setMessages(prev => [...prev, firstMessage]);
+      setNextWarriorIndex(1); // Next warrior to respond
+      
+    } catch (error) {
+      console.error("Error in initial responses:", error);
+      toast.error("Failed to start conversation");
+    } finally {
+      isProcessingRef.current = false;
+      setIsLoading(false);
+    }
+  };
   
   // Auto-scroll to bottom when new messages arrive
   useEffect(() => {
     scrollToBottom();
   }, [messages]);
   
+  // Continue conversation effect - Warriors keep chatting even without user input
+  useEffect(() => {
+    let conversationTimer: NodeJS.Timeout;
+    
+    const continueConversation = async () => {
+      // Don't continue if loading, processing, or conversation is paused
+      if (isLoading || isProcessingRef.current || conversationPaused || messages.length === 0) return;
+      
+      isProcessingRef.current = true;
+      setIsLoading(true);
+      
+      try {
+        // Get recent context for the conversation (last 6 messages or fewer)
+        const recentMessages = messages.slice(-Math.min(6, messages.length));
+        
+        // Choose next warrior to respond (round-robin)
+        const warrior = warriors[nextWarriorIndex];
+        
+        // Get response from this warrior based on the conversation so far
+        const response = await getWarriorResponse(
+          warrior,
+          recentMessages,
+          topic
+        );
+        
+        // Add a variable delay to simulate natural conversation timing (2-4 seconds)
+        const typingDelay = 2000 + Math.random() * 2000;
+        await new Promise(resolve => setTimeout(resolve, typingDelay));
+        
+        // Add the new message
+        const newMessage: Message = {
+          warrior: warrior.id,
+          content: response,
+          timestamp: new Date()
+        };
+        
+        setMessages(prev => [...prev, newMessage]);
+        
+        // Update next warrior to respond (round-robin)
+        setNextWarriorIndex((nextWarriorIndex + 1) % warriors.length);
+        
+      } catch (error) {
+        console.error("Error in continue conversation:", error);
+      } finally {
+        isProcessingRef.current = false;
+        setIsLoading(false);
+      }
+    };
+    
+    // Set timer to continue conversation every 8-12 seconds if not paused
+    if (!conversationPaused && messages.length > 0) {
+      const randomDelay = 8000 + Math.random() * 4000; // 8-12 seconds
+      conversationTimer = setTimeout(continueConversation, randomDelay);
+    }
+    
+    return () => {
+      clearTimeout(conversationTimer);
+    };
+  }, [messages, warriors, nextWarriorIndex, isLoading, conversationPaused, topic]);
+  
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   };
   
-  const handleSendMessage = () => {
-    if (!userInput.trim()) return;
+  // Function to get a specific warrior's response via OpenAI
+  const getWarriorResponse = async (
+    warrior: Warrior,
+    contextMessages: Message[],
+    currentTopic: string
+  ): Promise<string> => {
+    try {
+      // Get the system prompt for this warrior
+      const systemPrompt = warriorContexts.current[warrior.id].systemPrompt;
+      
+      // Add wisdom guidance based on warrior
+      const wisdomPrompt = getWarriorWisdom(warrior.id);
+      
+      // Format messages for the OpenAI API
+      const formattedMessages = [
+        { role: "system", content: systemPrompt },
+        { role: "system", content: `When sharing wisdom or advice: ${wisdomPrompt}` },
+        ...contextMessages.map(msg => {
+          if (msg.warrior === "system") {
+            return { role: "system", content: msg.content };
+          } else if (msg.warrior === "user") {
+            return { role: "user", content: msg.content };
+          } else {
+            // Get the name of the warrior who sent this message
+            const speakerName = warriors.find(w => w.id === msg.warrior)?.name || "Unknown Warrior";
+            return { 
+              role: "assistant", 
+              content: `${speakerName}: ${msg.content}` 
+            };
+          }
+        })
+      ];
+      
+      // If the last message was from the same warrior, add a system message encouraging different behavior
+      const lastMessage = contextMessages[contextMessages.length - 1];
+      if (lastMessage && lastMessage.warrior === warrior.id) {
+        formattedMessages.push({
+          role: "system",
+          content: "The conversation should continue naturally. Consider asking a question or building on what was just said."
+        });
+      }
+      
+      // Add topic reminder to keep conversation focused
+      formattedMessages.push({
+        role: "system",
+        content: `Remember, the conversation topic is "${currentTopic}". If appropriate, ask a question to the user or other warriors to keep the conversation flowing naturally.`
+      });
+      
+      // Get the completion from OpenAI
+      const response = await createChatCompletion({
+        messages: formattedMessages,
+        temperature: 0.8, // Slightly higher temperature for more varied responses
+      });
+      
+      // Remove any instances where the AI included the warrior's name at the beginning
+      let cleanedResponse = response;
+      const namePrefix = new RegExp(`^\\[?${warrior.name}\\]?:?\\s*`, 'i');
+      cleanedResponse = cleanedResponse.replace(namePrefix, '');
+      
+      return cleanedResponse;
+    } catch (error) {
+      console.error("Error getting warrior response:", error);
+      return "I apologize, but I am unable to respond at the moment.";
+    }
+  };
+  
+  // Handle user sending a message
+  const handleSendMessage = async () => {
+    if (!userInput.trim() || isLoading) return;
     
-    // Add user message
+    // Add content moderation check
+    const isConcerningContent = moderateUserMessage(userInput);
+    
     const userMessage: Message = {
       warrior: "user",
       content: userInput,
@@ -75,42 +244,77 @@ export const ChatInterface = ({ warriors, topic, onBack }: ChatInterfaceProps) =
     setMessages(prev => [...prev, userMessage]);
     setUserInput("");
     setIsLoading(true);
+    isProcessingRef.current = true;
     
-    // Simulate warrior responses
-    setTimeout(() => {
-      // Random selection of warriors who will respond (1-3)
-      const respondingWarriors = warriors
-        .sort(() => Math.random() - 0.5)
-        .slice(0, Math.floor(Math.random() * 3) + 1);
+    try {
+      if (isConcerningContent) {
+        // Insert a system message with crisis resources
+        const crisisMessage: Message = {
+          warrior: "system",
+          content: "We've detected concerning content in your message. If you're experiencing thoughts of self-harm or suicide, please contact a mental health professional or crisis line immediately: National Suicide Prevention Lifeline: 988 or 1-800-273-8255",
+          timestamp: new Date()
+        };
+        
+        setMessages(prev => [...prev, crisisMessage]);
+        
+        // Optional: pause the conversation
+        setConversationPaused(true);
+        
+        // Continue with modified prompt to warriors...
+      }
       
-      const responses = respondingWarriors.map(warrior => ({
-        warrior: warrior.id,
-        content: simulateResponse(warrior, userInput, topic),
-        timestamp: new Date(Date.now() + Math.random() * 3000)
-      }));
+      // Get recent context for the conversation
+      const recentMessages = messages.slice(-Math.min(6, messages.length));
       
-      const sortedResponses = responses.sort((a, b) => 
-        a.timestamp.getTime() - b.timestamp.getTime()
+      // Add the user's new message to the context
+      const contextWithUserMessage = [...recentMessages, userMessage];
+      
+      // Choose a single warrior to respond first (randomly or intelligently)
+      const respondingWarrior = warriors[nextWarriorIndex];
+      
+      // Get response from this warrior based on the conversation so far
+      const response = await getWarriorResponse(
+        respondingWarrior,
+        contextWithUserMessage,
+        topic
       );
       
-      sortedResponses.forEach((msg, index) => {
-        setTimeout(() => {
-          setMessages(prev => [...prev, msg]);
-          if (index === sortedResponses.length - 1) {
-            setIsLoading(false);
-          }
-        }, (index + 1) * 1500);
-      });
-    }, 1000);
+      const newMessage: Message = {
+        warrior: respondingWarrior.id,
+        content: response,
+        timestamp: new Date()
+      };
+      
+      setMessages(prev => [...prev, newMessage]);
+      
+      // Update the next warrior index for the continuous conversation
+      setNextWarriorIndex((nextWarriorIndex + 1) % warriors.length);
+      
+      // Pause briefly then resume conversation naturally
+      await new Promise(resolve => setTimeout(resolve, 3000));
+      setConversationPaused(false);
+      
+    } catch (error) {
+      console.error("Error sending message:", error);
+      toast.error("Failed to send message");
+    } finally {
+      isProcessingRef.current = false;
+      setIsLoading(false);
+    }
   };
   
-  const handleRefocus = () => {
+  const handleRefocus = async () => {
+    if (isProcessingRef.current) return;
+    
     setIsLoading(true);
+    isProcessingRef.current = true;
+    setConversationPaused(true);
+    
     toast.info("Refocusing the conversation on the topic", {
       description: topic
     });
     
-    setTimeout(() => {
+    try {
       const refocusMessage: Message = {
         warrior: "system",
         content: `Let's refocus our discussion on: "${topic}"`,
@@ -119,28 +323,75 @@ export const ChatInterface = ({ warriors, topic, onBack }: ChatInterfaceProps) =
       
       setMessages(prev => [...prev, refocusMessage]);
       
-      // Simulate responses after refocus
-      warriors.forEach((warrior, index) => {
-        setTimeout(() => {
-          const response: Message = {
-            warrior: warrior.id,
-            content: getRefocusResponse(warrior, topic),
-            timestamp: new Date()
-          };
-          
-          setMessages(prev => [...prev, response]);
-          if (index === warriors.length - 1) {
-            setIsLoading(false);
-          }
-        }, (index + 1) * 1500);
-      });
-    }, 1000);
+      // Have each warrior respond to the refocus
+      for (let i = 0; i < warriors.length; i++) {
+        const warrior = warriors[i];
+        
+        // Get recent messages plus the refocus message
+        const recentMessages = [
+          ...messages.slice(-Math.min(4, messages.length)), 
+          refocusMessage
+        ];
+        
+        const response = await getWarriorResponse(warrior, recentMessages, topic);
+        
+        const newMessage: Message = {
+          warrior: warrior.id,
+          content: response,
+          timestamp: new Date()
+        };
+        
+        // Add with delay
+        await new Promise(resolve => {
+          setTimeout(() => {
+            setMessages(prev => [...prev, newMessage]);
+            resolve(null);
+          }, 1500);
+        });
+      }
+      
+      // Set next warrior for continuing conversation
+      setNextWarriorIndex(0);
+      
+    } catch (error) {
+      console.error("Error in refocus:", error);
+      toast.error("Failed to refocus conversation");
+    } finally {
+      isProcessingRef.current = false;
+      setIsLoading(false);
+      setConversationPaused(false);
+    }
   };
   
-  // Find warrior by ID
-  const getWarrior = (id: string): Warrior | undefined => {
-    return warriors.find(w => w.id === id);
+  // Helper to get warrior name by ID
+  const getWarriorName = (id: string | "user" | "system"): string => {
+    if (id === "user") return "User";
+    if (id === "system") return "System";
+    return warriors.find(w => w.id === id)?.name || "Unknown Warrior";
   };
+  
+  // Toggle auto-continuation of conversation
+  const toggleConversation = () => {
+    setConversationPaused(!conversationPaused);
+    
+    if (conversationPaused) {
+      toast.info("Conversation will continue automatically");
+    } else {
+      toast.info("Conversation paused");
+    }
+  };
+
+  // Every 10 messages, summarize the conversation to maintain context
+  useEffect(() => {
+    const summarizeConversation = async () => {
+      if (messages.length > 0 && messages.length % 10 === 0) {
+        // Implementation for summarization logic
+        // This would use OpenAI to create a summary of the conversation
+      }
+    };
+    
+    summarizeConversation();
+  }, [messages]);
 
   return (
     <div className="flex flex-col h-[80vh] max-w-4xl w-full mx-auto">
@@ -151,6 +402,19 @@ export const ChatInterface = ({ warriors, topic, onBack }: ChatInterfaceProps) =
             <p className="text-zinc-400 text-sm">Topic: {topic}</p>
           </div>
           <div className="flex space-x-2">
+            <Button 
+              variant="outline" 
+              size="sm" 
+              onClick={toggleConversation}
+              className="border-zinc-700 text-zinc-300"
+            >
+              {conversationPaused ? (
+                <PlayCircle className="w-4 h-4 mr-2" />
+              ) : (
+                <PauseCircle className="w-4 h-4 mr-2" />
+              )}
+              {conversationPaused ? "Resume" : "Pause"}
+            </Button>
             <Button 
               variant="outline" 
               size="sm" 
@@ -198,7 +462,7 @@ export const ChatInterface = ({ warriors, topic, onBack }: ChatInterfaceProps) =
             );
           }
           
-          const warrior = getWarrior(msg.warrior);
+          const warrior = warriors.find(w => w.id === msg.warrior);
           if (!warrior) return null;
           
           return (
@@ -218,10 +482,10 @@ export const ChatInterface = ({ warriors, topic, onBack }: ChatInterfaceProps) =
         })}
         <div ref={messagesEndRef} />
         
-        {isLoading && (
+        {isLoading && typingWarrior && (
           <div className="text-center">
             <span className="inline-block px-3 py-1 rounded-full text-xs text-zinc-400">
-              Warriors are thinking...
+              {warriors.find(w => w.id === typingWarrior)?.name || "Warrior"} is thinking...
             </span>
           </div>
         )}
@@ -253,42 +517,3 @@ export const ChatInterface = ({ warriors, topic, onBack }: ChatInterfaceProps) =
     </div>
   );
 };
-
-// Helper functions for mock responses
-function getInitialResponse(warrior: Warrior, topic: string): string {
-  const personalityTraits = warrior.personality.split(", ");
-  const randomTrait = personalityTraits[Math.floor(Math.random() * personalityTraits.length)];
-  
-  const responses = [
-    `Greetings. I look forward to discussing ${topic} with fellow warriors.`,
-    `Ah, ${topic}. A worthy subject for our gathering.`,
-    `I've much to share about ${topic} from my experiences.`,
-    `${topic}? An excellent choice for warriors to discuss.`
-  ];
-  
-  return responses[Math.floor(Math.random() * responses.length)];
-}
-
-function getRefocusResponse(warrior: Warrior, topic: string): string {
-  const responses = [
-    `Indeed, let us return to ${topic}.`,
-    `Yes, ${topic} is what we should focus on.`,
-    `I have more insights on ${topic} to share.`,
-    `Back to ${topic} - as I was saying...`
-  ];
-  
-  return responses[Math.floor(Math.random() * responses.length)];
-}
-
-function simulateResponse(warrior: Warrior, userInput: string, topic: string): string {
-  // In a real implementation, this would call the OpenAI API
-  const responses = [
-    `From my experience, I've learned that ${topic} requires discipline and practice.`,
-    `When I faced challenges regarding ${topic}, I relied on my training.`,
-    `Throughout history, ${topic} has been approached in many ways.`,
-    `The strategy I employed for ${topic} was successful in my campaigns.`,
-    `I would advise considering all angles when approaching ${topic}.`
-  ];
-  
-  return responses[Math.floor(Math.random() * responses.length)];
-}
