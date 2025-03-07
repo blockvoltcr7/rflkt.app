@@ -1,4 +1,3 @@
-
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { PlaceholdersAndVanishInput } from "@/components/ui/placeholders-and-vanish-input";
@@ -21,7 +20,6 @@ const Auth = () => {
     "Waiting for passphrase...",
   ];
 
-  // Fetch the secret passphrase from Supabase
   useEffect(() => {
     const fetchSecretPassphrase = async () => {
       try {
@@ -65,30 +63,24 @@ const Auth = () => {
     }
     
     if (inputValue.toLowerCase() === secretPassphrase.toLowerCase()) {
-      // Correct passphrase, set authenticated to true in localStorage
       localStorage.setItem("authenticated", "true");
       
-      // Show success toast
       toast.success("Access granted", {
         description: "Welcome to the application",
         duration: 3000,
       });
       
-      // Redirect to home page after a short delay
       setTimeout(() => {
         navigate("/dashboard");
       }, 1500);
     } else {
-      // Increment attempts
       setAttempts(attempts + 1);
       
-      // Show error toast
       toast.error("Access denied", {
         description: attempts >= 2 ? "Final warning: Incorrect passphrase" : "Incorrect passphrase",
         duration: 3000,
       });
       
-      // If too many failed attempts, show additional warning
       if (attempts >= 3) {
         toast.error("Security alert", {
           description: "Multiple failed attempts detected",
@@ -98,7 +90,6 @@ const Auth = () => {
     }
   };
 
-  // Check if user is already authenticated
   useEffect(() => {
     const isAuthenticated = localStorage.getItem("authenticated") === "true";
     if (isAuthenticated) {
@@ -107,7 +98,7 @@ const Auth = () => {
   }, [navigate]);
 
   return (
-    <div className="min-h-screen bg-gray-50 dark:bg-gray-900 flex flex-col items-center justify-center p-4">
+    <div className="min-h-screen bg-black flex flex-col items-center justify-center p-4">
       <div className="max-w-md w-full space-y-8">
         <div className="h-28 w-full">
           <TextHoverEffect text="RFLKT" />
@@ -115,7 +106,7 @@ const Auth = () => {
         
         <div className="mt-8">
           {isLoading ? (
-            <div className="text-center text-sm text-gray-500">Loading...</div>
+            <div className="text-center text-sm text-zinc-500">Loading...</div>
           ) : (
             <PlaceholdersAndVanishInput
               placeholders={placeholders}
@@ -125,7 +116,7 @@ const Auth = () => {
           )}
         </div>
         
-        <div className="mt-6 text-center text-xs text-gray-400">
+        <div className="mt-6 text-center text-xs text-zinc-500">
           Enter the secret passphrase to gain access
         </div>
       </div>
