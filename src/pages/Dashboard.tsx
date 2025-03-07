@@ -3,6 +3,7 @@ import { useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { TextHoverEffect } from "@/components/ui/text-hover-effect";
+import { WarriorChat } from "@/components/WarriorChat/WarriorChat";
 
 const Dashboard = () => {
   const navigate = useNavigate();
@@ -21,28 +22,33 @@ const Dashboard = () => {
   };
 
   return (
-    <div className="min-h-screen bg-black text-white flex flex-col items-center justify-center p-4">
-      <div className="max-w-4xl w-full space-y-8 text-center">
-        <div className="h-28 w-full">
-          <TextHoverEffect text="WELCOME" />
-        </div>
-        
-        <div className="bg-[#111] shadow-xl rounded-lg p-8 border border-zinc-800">
-          <h2 className="text-2xl font-bold mb-4 text-white">
-            You've successfully accessed the application
-          </h2>
-          <p className="text-zinc-400 mb-8">
-            This is your secure dashboard. Only users with the correct passphrase can see this page.
-          </p>
+    <div className="min-h-screen bg-black text-white flex flex-col items-center p-4">
+      <div className="w-full max-w-6xl mx-auto">
+        <div className="flex justify-between items-center mb-8">
+          <div className="h-16 w-48">
+            <TextHoverEffect text="WARRIORCHAT" />
+          </div>
           
           <Button 
             onClick={handleLogout}
             variant="outline"
-            className="mt-4 border-zinc-700 hover:bg-zinc-800"
+            className="border-zinc-700 hover:bg-zinc-800"
           >
             Logout
           </Button>
         </div>
+        
+        <div className="bg-[#111] shadow-xl rounded-lg p-6 border border-zinc-800 mb-8">
+          <h2 className="text-2xl font-bold mb-2 text-white">
+            Welcome to WarriorChat
+          </h2>
+          <p className="text-zinc-400 mb-6">
+            Select historical warriors and engage in conversations about strategy, resilience, 
+            and victories. Ask questions, join the discussion, and learn from history's greatest warriors.
+          </p>
+        </div>
+        
+        <WarriorChat />
       </div>
     </div>
   );
