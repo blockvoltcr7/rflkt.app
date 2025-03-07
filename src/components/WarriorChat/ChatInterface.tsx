@@ -4,21 +4,18 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { toast } from "sonner";
 import { RefreshCw, Send, PauseCircle, PlayCircle } from "lucide-react";
-import { createChatCompletion, createWarriorSystemPrompt, createContinuousConversationPrompt, getWarriorWisdom, moderateUserMessage } from "@/services/openai";
-
-interface Message {
-  warrior: string | "user" | "system";
-  content: string;
-  timestamp: Date;
-}
+import { createChatCompletion, createWarriorSystemPrompt, createContinuousConversationPrompt, getWarriorWisdom, moderateUserMessage, createPhraseSystemPrompt } from "@/services/openai";
+import { Message } from "@/types/chat";
 
 interface ChatInterfaceProps {
   warriors: Warrior[];
   topic: string;
   onBack: () => void;
+  chatMode: "warriors" | "phrase";
+  selectedPhrase: string;
 }
 
-export const ChatInterface = ({ warriors, topic, onBack }: ChatInterfaceProps) => {
+export const ChatInterface = ({ warriors, topic, onBack, chatMode, selectedPhrase }: ChatInterfaceProps) => {
   const [messages, setMessages] = useState<Message[]>([]);
   const [userInput, setUserInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
@@ -30,7 +27,7 @@ export const ChatInterface = ({ warriors, topic, onBack }: ChatInterfaceProps) =
   const isProcessingRef = useRef(false);
   
   // Create map of warrior contexts for the OpenAI prompts
-  const warriorContexts = useRef<Record<string, any>>({});
+  const warriorContexts = useRef<Record<string, { systemPrompt: string; warrior: Warrior }>>({});
   
   const [typingWarrior, setTypingWarrior] = useState<string | null>(null);
   
@@ -42,38 +39,88 @@ export const ChatInterface = ({ warriors, topic, onBack }: ChatInterfaceProps) =
     recentMessages: []
   });
   
+  // Check for API key when component mounts
   useEffect(() => {
-    // Initialize warrior contexts
-    const contexts: Record<string, any> = {};
-    warriors.forEach(warrior => {
-      contexts[warrior.id] = {
-        systemPrompt: createWarriorSystemPrompt(warrior, topic),
-        warrior: warrior
+    // Check if API key is set
+    if (!import.meta.env.VITE_OPENAI_API_KEY) {
+      console.error("OpenAI API key is missing. Please add it to .env file.");
+      toast.error("API key missing. Chat functionality will not work.");
+      
+      // Add a system error message
+      const errorMessage: Message = {
+        warrior: "system",
+        content: "OpenAI API key is missing. Please add it to the .env file to use the chat functionality.",
+        timestamp: new Date()
       };
-    });
-    warriorContexts.current = contexts;
+      
+      setMessages(prev => [...prev, errorMessage]);
+    }
+  }, []);
+  
+  // Initialize chat interface and start conversation
+  useEffect(() => {
+    // Set loading state immediately
+    setIsLoading(true);
+    
+    console.log(`Initializing chat with mode: ${chatMode}, phrase: ${selectedPhrase}, topic: ${topic}`);
+    
+    // Initialize warrior contexts if in warrior mode
+    if (chatMode === "warriors") {
+      // Initialize warrior contexts
+      const contexts: Record<string, { systemPrompt: string; warrior: Warrior }> = {};
+      warriors.forEach(warrior => {
+        contexts[warrior.id] = {
+          systemPrompt: createWarriorSystemPrompt(warrior, topic),
+          warrior: warrior
+        };
+      });
+      warriorContexts.current = contexts;
+    }
     
     // Initialize chat with welcome message
     const initialMessage: Message = {
       warrior: "system",
-      content: `Welcome to a discussion on "${topic}" with historical warriors`,
+      content: chatMode === "warriors" 
+        ? `Welcome to a discussion on "${topic}" with historical warriors`
+        : `Welcome to a reflection with "${selectedPhrase}"`,
       timestamp: new Date()
     };
     
     setMessages([initialMessage]);
     
-    // Start the initial warrior responses
-    startInitialResponses();
-  }, [warriors, topic]);
+    // Add a slight delay before starting the conversation
+    // This ensures the welcome message is displayed first
+    setTimeout(() => {
+      // Start the initial warrior responses or phrase reflection
+      if (chatMode === "warriors") {
+        startInitialResponses();
+      } else {
+        startPhraseReflection();
+      }
+    }, 300);
+    
+    // Cleanup function
+    return () => {
+      // Clean up any pending operations
+      isProcessingRef.current = false;
+    };
+  }, [warriors, topic, chatMode, selectedPhrase]);
   
   const startInitialResponses = async () => {
-    setIsLoading(true);
+    // Don't set loading here since it's already set in the useEffect
     isProcessingRef.current = true;
     
     try {
       // Get the first warrior to respond
       const firstWarrior = warriors[0];
+      
+      // Show typing indicator
+      setTypingWarrior(firstWarrior.id);
+      
       const initialResponse = await getWarriorResponse(firstWarrior, [], topic);
+      
+      // Clear typing indicator
+      setTypingWarrior(null);
       
       const firstMessage: Message = {
         warrior: firstWarrior.id,
@@ -87,6 +134,84 @@ export const ChatInterface = ({ warriors, topic, onBack }: ChatInterfaceProps) =
     } catch (error) {
       console.error("Error in initial responses:", error);
       toast.error("Failed to start conversation");
+      
+      // Add error message
+      const errorMessage: Message = {
+        warrior: "system",
+        content: "Failed to start the conversation. Please try again.",
+        timestamp: new Date()
+      };
+      
+      setMessages(prev => [...prev, errorMessage]);
+    } finally {
+      isProcessingRef.current = false;
+      setIsLoading(false);
+    }
+  };
+  
+  const startPhraseReflection = async () => {
+    isProcessingRef.current = true;
+    
+    try {
+      // Debug message
+      console.log("Starting phrase reflection for:", selectedPhrase);
+      
+      // Create system prompt for the phrase
+      const phraseSystemPrompt = createPhraseSystemPrompt(selectedPhrase, "");
+      
+      // Show typing indicator for phrase
+      setTypingWarrior("phrase");
+      
+      // Get initial reflection from the phrase perspective - with a special introductory prompt
+      const initialPrompt = [
+        { role: "system" as const, content: phraseSystemPrompt },
+        { role: "system" as const, content: "Introduce yourself as the embodiment of this phrase. Explain what you represent and ask a thoughtful question to start the conversation." },
+        { role: "user" as const, content: "I want to reflect on this phrase. Please introduce yourself and help me understand what it means." }
+      ];
+      
+      console.log("Sending API request with prompt:", initialPrompt);
+      
+      const response = await createChatCompletion({
+        messages: initialPrompt,
+        temperature: 0.8,
+        max_tokens: 300
+      });
+      
+      console.log("Received response:", response);
+      
+      // Add a short typing delay to make it feel more natural
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      
+      // Clear typing indicator
+      setTypingWarrior(null);
+      
+      // Only proceed if we got a non-empty response
+      if (response && response.trim()) {
+        const firstMessage: Message = {
+          warrior: "phrase",
+          content: response,
+          timestamp: new Date()
+        };
+        
+        setMessages(prev => [...prev, firstMessage]);
+        console.log("Added phrase message to state:", firstMessage);
+      } else {
+        console.error("Empty response received from API");
+        throw new Error("Empty response from API");
+      }
+      
+    } catch (error) {
+      console.error("Error in initial phrase reflection:", error);
+      toast.error("Failed to start reflection");
+      
+      // Add a system error message
+      const errorMessage: Message = {
+        warrior: "system",
+        content: "I apologize, but I encountered an error starting the reflection. Please try again or select a different phrase.",
+        timestamp: new Date()
+      };
+      
+      setMessages(prev => [...prev, errorMessage]);
     } finally {
       isProcessingRef.current = false;
       setIsLoading(false);
@@ -98,11 +223,14 @@ export const ChatInterface = ({ warriors, topic, onBack }: ChatInterfaceProps) =
     scrollToBottom();
   }, [messages]);
   
-  // Continue conversation effect - Warriors keep chatting even without user input
+  // Continue conversation effect - Only for Warrior chat mode
   useEffect(() => {
     let conversationTimer: NodeJS.Timeout;
     
     const continueConversation = async () => {
+      // Only run this for warrior chat mode
+      if (chatMode !== "warriors") return;
+      
       // Don't continue if loading, processing, or conversation is paused
       if (isLoading || isProcessingRef.current || conversationPaused || messages.length === 0) return;
       
@@ -148,7 +276,8 @@ export const ChatInterface = ({ warriors, topic, onBack }: ChatInterfaceProps) =
     };
     
     // Set timer to continue conversation every 8-12 seconds if not paused
-    if (!conversationPaused && messages.length > 0) {
+    // Only for warrior chat mode
+    if (chatMode === "warriors" && !conversationPaused && messages.length > 0) {
       const randomDelay = 8000 + Math.random() * 4000; // 8-12 seconds
       conversationTimer = setTimeout(continueConversation, randomDelay);
     }
@@ -156,7 +285,7 @@ export const ChatInterface = ({ warriors, topic, onBack }: ChatInterfaceProps) =
     return () => {
       clearTimeout(conversationTimer);
     };
-  }, [messages, warriors, nextWarriorIndex, isLoading, conversationPaused, topic]);
+  }, [messages, warriors, nextWarriorIndex, isLoading, conversationPaused, topic, chatMode]);
   
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -177,18 +306,20 @@ export const ChatInterface = ({ warriors, topic, onBack }: ChatInterfaceProps) =
       
       // Format messages for the OpenAI API
       const formattedMessages = [
-        { role: "system", content: systemPrompt },
-        { role: "system", content: `When sharing wisdom or advice: ${wisdomPrompt}` },
+        { role: "system" as const, content: systemPrompt },
+        { role: "system" as const, content: `When sharing wisdom or advice: ${wisdomPrompt}` },
         ...contextMessages.map(msg => {
           if (msg.warrior === "system") {
-            return { role: "system", content: msg.content };
+            return { role: "system" as const, content: msg.content };
           } else if (msg.warrior === "user") {
-            return { role: "user", content: msg.content };
+            return { role: "user" as const, content: msg.content };
+          } else if (msg.warrior === "phrase") {
+            return { role: "assistant" as const, content: msg.content };
           } else {
             // Get the name of the warrior who sent this message
             const speakerName = warriors.find(w => w.id === msg.warrior)?.name || "Unknown Warrior";
             return { 
-              role: "assistant", 
+              role: "assistant" as const, 
               content: `${speakerName}: ${msg.content}` 
             };
           }
@@ -199,159 +330,279 @@ export const ChatInterface = ({ warriors, topic, onBack }: ChatInterfaceProps) =
       const lastMessage = contextMessages[contextMessages.length - 1];
       if (lastMessage && lastMessage.warrior === warrior.id) {
         formattedMessages.push({
-          role: "system",
-          content: "The conversation should continue naturally. Consider asking a question or building on what was just said."
+          role: "system" as const, 
+          content: "The last message in this conversation was from you. Add something new to the discussion or respond to a different point."
         });
       }
       
-      // Add topic reminder to keep conversation focused
-      formattedMessages.push({
-        role: "system",
-        content: `Remember, the conversation topic is "${currentTopic}". If appropriate, ask a question to the user or other warriors to keep the conversation flowing naturally.`
-      });
-      
-      // Get the completion from OpenAI
+      // Call OpenAI API
       const response = await createChatCompletion({
         messages: formattedMessages,
-        temperature: 0.8, // Slightly higher temperature for more varied responses
+        temperature: 0.8,
+        max_tokens: 300
       });
       
-      // Remove any instances where the AI included the warrior's name at the beginning
-      let cleanedResponse = response;
-      const namePrefix = new RegExp(`^\\[?${warrior.name}\\]?:?\\s*`, 'i');
-      cleanedResponse = cleanedResponse.replace(namePrefix, '');
-      
-      return cleanedResponse;
+      return response;
     } catch (error) {
       console.error("Error getting warrior response:", error);
       return "I apologize, but I am unable to respond at the moment.";
     }
   };
   
+  // Function to get response from a phrase perspective
+  const getPhraseResponse = async (
+    contextMessages: Message[],
+    currentTopic: string = ""
+  ): Promise<string> => {
+    try {
+      // Create system prompt for the phrase, passing empty topic if not provided
+      const phraseSystemPrompt = createPhraseSystemPrompt(selectedPhrase, currentTopic || "");
+      
+      // Format messages for the OpenAI API
+      const formattedMessages = [
+        { role: "system" as const, content: phraseSystemPrompt },
+        ...contextMessages.map(msg => {
+          if (msg.warrior === "system") {
+            return { role: "system" as const, content: msg.content };
+          } else if (msg.warrior === "user") {
+            return { role: "user" as const, content: msg.content };
+          } else if (msg.warrior === "phrase") {
+            return { role: "assistant" as const, content: msg.content };
+          } else {
+            // Get the name of the warrior who sent this message (should not happen in phrase mode)
+            const speakerName = warriors.find(w => w.id === msg.warrior)?.name || "Unknown Warrior";
+            return { 
+              role: "assistant" as const, 
+              content: `${speakerName}: ${msg.content}` 
+            };
+          }
+        })
+      ];
+      
+      // Call OpenAI API
+      const response = await createChatCompletion({
+        messages: formattedMessages,
+        temperature: 0.8,
+        max_tokens: 300
+      });
+      
+      return response;
+    } catch (error) {
+      console.error("Error getting phrase response:", error);
+      return "I'm reflecting on this, but need a moment to gather my thoughts.";
+    }
+  };
+
   // Handle user sending a message
   const handleSendMessage = async () => {
     if (!userInput.trim() || isLoading) return;
     
-    // Add content moderation check
-    const isConcerningContent = moderateUserMessage(userInput);
+    const trimmedInput = userInput.trim();
+    setUserInput("");
     
+    // Check for concerning content
+    if (moderateUserMessage(trimmedInput)) {
+      // Add system message with crisis resources
+      const crisisMessage: Message = {
+        warrior: "system",
+        content: "I notice you're expressing thoughts that concern me. If you're experiencing a crisis, please consider contacting a mental health professional or crisis line: National Suicide Prevention Lifeline: 988 or 1-800-273-8255",
+        timestamp: new Date()
+      };
+      
+      setMessages(prev => [...prev, crisisMessage]);
+      return;
+    }
+    
+    // Add user message to chat
     const userMessage: Message = {
       warrior: "user",
-      content: userInput,
+      content: trimmedInput,
       timestamp: new Date()
     };
     
     setMessages(prev => [...prev, userMessage]);
-    setUserInput("");
+    
+    // Set loading state
     setIsLoading(true);
     isProcessingRef.current = true;
     
+    // Get recent context (last 10 messages)
+    const recentContext = messages.slice(-Math.min(10, messages.length));
+    
     try {
-      if (isConcerningContent) {
-        // Insert a system message with crisis resources
-        const crisisMessage: Message = {
-          warrior: "system",
-          content: "We've detected concerning content in your message. If you're experiencing thoughts of self-harm or suicide, please contact a mental health professional or crisis line immediately: National Suicide Prevention Lifeline: 988 or 1-800-273-8255",
+      // Handle differently based on chat mode
+      if (chatMode === "warriors") {
+        // For warrior chat, choose a warrior to respond to the user
+        const respondingWarrior = warriors[nextWarriorIndex];
+        
+        // Indicate which warrior is typing
+        setTypingWarrior(respondingWarrior.id);
+        
+        // Get response from warrior
+        const response = await getWarriorResponse(
+          respondingWarrior,
+          [...recentContext, userMessage],
+          topic
+        );
+        
+        // Add warrior's response
+        const newMessage: Message = {
+          warrior: respondingWarrior.id,
+          content: response,
           timestamp: new Date()
         };
         
-        setMessages(prev => [...prev, crisisMessage]);
+        setMessages(prev => [...prev, newMessage]);
         
-        // Optional: pause the conversation
-        setConversationPaused(true);
+        // Update next warrior
+        setNextWarriorIndex((nextWarriorIndex + 1) % warriors.length);
+      } else {
+        console.log("Sending message in phrase chat mode");
         
-        // Continue with modified prompt to warriors...
+        // For phrase chat, get a response from the phrase perspective
+        
+        // Indicate the phrase is "typing"
+        setTypingWarrior("phrase");
+        
+        // Get response from phrase
+        const response = await getPhraseResponse(
+          [...recentContext, userMessage],
+          ""  // Empty topic for phrase chat
+        );
+        
+        console.log("Phrase response received:", response);
+        
+        // Add phrase response if we got one
+        if (response && response.trim()) {
+          const newMessage: Message = {
+            warrior: "phrase",
+            content: response,
+            timestamp: new Date()
+          };
+          
+          setMessages(prev => [...prev, newMessage]);
+        } else {
+          // Handle empty response
+          const errorMessage: Message = {
+            warrior: "system",
+            content: "I apologize, but I couldn't generate a response. Please try again.",
+            timestamp: new Date()
+          };
+          
+          setMessages(prev => [...prev, errorMessage]);
+        }
       }
-      
-      // Get recent context for the conversation
-      const recentMessages = messages.slice(-Math.min(6, messages.length));
-      
-      // Add the user's new message to the context
-      const contextWithUserMessage = [...recentMessages, userMessage];
-      
-      // Choose a single warrior to respond first (randomly or intelligently)
-      const respondingWarrior = warriors[nextWarriorIndex];
-      
-      // Get response from this warrior based on the conversation so far
-      const response = await getWarriorResponse(
-        respondingWarrior,
-        contextWithUserMessage,
-        topic
-      );
-      
-      const newMessage: Message = {
-        warrior: respondingWarrior.id,
-        content: response,
-        timestamp: new Date()
-      };
-      
-      setMessages(prev => [...prev, newMessage]);
-      
-      // Update the next warrior index for the continuous conversation
-      setNextWarriorIndex((nextWarriorIndex + 1) % warriors.length);
-      
-      // Pause briefly then resume conversation naturally
-      await new Promise(resolve => setTimeout(resolve, 3000));
-      setConversationPaused(false);
       
     } catch (error) {
       console.error("Error sending message:", error);
       toast.error("Failed to send message");
+      
+      // Add error message
+      const errorMessage: Message = {
+        warrior: "system",
+        content: "I apologize, but there was an error processing your message. Please try again.",
+        timestamp: new Date()
+      };
+      
+      setMessages(prev => [...prev, errorMessage]);
     } finally {
-      isProcessingRef.current = false;
+      setTypingWarrior(null);
       setIsLoading(false);
+      isProcessingRef.current = false;
     }
   };
   
   const handleRefocus = async () => {
-    if (isProcessingRef.current) return;
+    if (isLoading || isProcessingRef.current) return;
     
     setIsLoading(true);
     isProcessingRef.current = true;
-    setConversationPaused(true);
-    
-    toast.info("Refocusing the conversation on the topic", {
-      description: topic
-    });
     
     try {
+      // Create a refocus message that's different based on chat mode
       const refocusMessage: Message = {
         warrior: "system",
-        content: `Let's refocus our discussion on: "${topic}"`,
+        content: chatMode === "warriors" 
+          ? `Let's refocus our discussion on: "${topic}"`
+          : `Let's continue exploring the concept of "${selectedPhrase}"`,
         timestamp: new Date()
       };
       
       setMessages(prev => [...prev, refocusMessage]);
       
-      // Have each warrior respond to the refocus
-      for (let i = 0; i < warriors.length; i++) {
-        const warrior = warriors[i];
+      // Need to wait a bit for the UI to update
+      await new Promise(resolve => setTimeout(resolve, 500));
+      
+      // Get response based on chat mode
+      if (chatMode === "warriors") {
+        // Choose a warrior to respond to the refocus
+        const respondingWarrior = warriors[nextWarriorIndex];
         
-        // Get recent messages plus the refocus message
-        const recentMessages = [
-          ...messages.slice(-Math.min(4, messages.length)), 
-          refocusMessage
-        ];
+        // Indicate which warrior is typing
+        setTypingWarrior(respondingWarrior.id);
         
-        const response = await getWarriorResponse(warrior, recentMessages, topic);
+        // Build a summary of the conversation so far
+        const summary = await getConversationSummary();
         
+        // Create a system message with the summary (not shown to user)
+        const summaryContext: Message = {
+          warrior: "system",
+          content: `Here's a summary of the conversation so far: ${summary}. Please continue the discussion focusing on ${topic}.`,
+          timestamp: new Date()
+        };
+        
+        // Get recent messages for context
+        const recentMessages = messages.slice(-5);
+        
+        // Get response from warrior
+        const response = await getWarriorResponse(
+          respondingWarrior,
+          [...recentMessages, summaryContext, refocusMessage],
+          topic
+        );
+        
+        // Clear typing indicator
+        setTypingWarrior(null);
+        
+        // Add warrior's response
         const newMessage: Message = {
-          warrior: warrior.id,
+          warrior: respondingWarrior.id,
           content: response,
           timestamp: new Date()
         };
         
-        // Add with delay
-        await new Promise(resolve => {
-          setTimeout(() => {
-            setMessages(prev => [...prev, newMessage]);
-            resolve(null);
-          }, 1500);
-        });
+        setMessages(prev => [...prev, newMessage]);
+        
+        // Update next warrior
+        setNextWarriorIndex((nextWarriorIndex + 1) % warriors.length);
+      } else {
+        // Phrase chat mode
+        
+        // Show typing indicator
+        setTypingWarrior("phrase");
+        
+        // Get recent messages for context
+        const recentMessages = messages.slice(-5);
+        
+        // Get response from phrase perspective
+        const response = await getPhraseResponse(
+          [...recentMessages, refocusMessage],
+          ""
+        );
+        
+        // Clear typing indicator after a short delay
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        setTypingWarrior(null);
+        
+        // Add phrase response
+        const newMessage: Message = {
+          warrior: "phrase",
+          content: response,
+          timestamp: new Date()
+        };
+        
+        setMessages(prev => [...prev, newMessage]);
       }
-      
-      // Set next warrior for continuing conversation
-      setNextWarriorIndex(0);
       
     } catch (error) {
       console.error("Error in refocus:", error);
@@ -359,15 +610,60 @@ export const ChatInterface = ({ warriors, topic, onBack }: ChatInterfaceProps) =
     } finally {
       isProcessingRef.current = false;
       setIsLoading(false);
-      setConversationPaused(false);
+    }
+  };
+  
+  // Helper function to get a summary of the conversation
+  const getConversationSummary = async (): Promise<string> => {
+    try {
+      // Only summarize if we have enough messages
+      if (messages.length < 3) {
+        return "The conversation has just started";
+      }
+      
+      // Prepare a prompt for summarization
+      const summaryPrompt = [
+        { 
+          role: "system" as const, 
+          content: "Summarize the following conversation in a brief paragraph. Focus on the main points discussed."
+        },
+        {
+          role: "user" as const,
+          content: messages.map(msg => {
+            const speaker = msg.warrior === "user" 
+              ? "User" 
+              : msg.warrior === "system" 
+                ? "System" 
+                : msg.warrior === "phrase"
+                  ? selectedPhrase
+                  : warriors.find(w => w.id === msg.warrior)?.name || "Unknown";
+            
+            return `${speaker}: ${msg.content}`;
+          }).join("\n\n")
+        }
+      ];
+      
+      // Call OpenAI to summarize
+      const summary = await createChatCompletion({
+        messages: summaryPrompt,
+        temperature: 0.5,
+        max_tokens: 150
+      });
+      
+      return summary;
+    } catch (error) {
+      console.error("Error summarizing conversation:", error);
+      return "Unable to summarize the conversation";
     }
   };
   
   // Helper to get warrior name by ID
-  const getWarriorName = (id: string | "user" | "system"): string => {
-    if (id === "user") return "User";
+  const getWarriorName = (id: string | "user" | "system" | "phrase"): string => {
+    if (id === "user") return "You";
     if (id === "system") return "System";
-    return warriors.find(w => w.id === id)?.name || "Unknown Warrior";
+    if (id === "phrase") return selectedPhrase;
+    
+    return warriors.find(w => w.id === id)?.name || "Unknown";
   };
   
   // Toggle auto-continuation of conversation
@@ -394,125 +690,111 @@ export const ChatInterface = ({ warriors, topic, onBack }: ChatInterfaceProps) =
   }, [messages]);
 
   return (
-    <div className="flex flex-col h-[80vh] max-w-4xl w-full mx-auto">
-      <div className="bg-zinc-900/50 border border-zinc-800 p-4 rounded-t-lg">
-        <div className="flex items-center justify-between">
-          <div>
-            <h2 className="text-xl font-bold text-white">WarriorChat</h2>
-            <p className="text-zinc-400 text-sm">Topic: {topic}</p>
-          </div>
-          <div className="flex space-x-2">
+    <div className="flex flex-col h-screen max-h-[800px]">
+      <div className="flex items-center justify-between p-4 border-b border-zinc-800">
+        <Button variant="ghost" onClick={onBack} className="text-zinc-400">
+          ← Back
+        </Button>
+        <h2 className="text-lg font-semibold text-white">
+          {chatMode === "warriors" 
+            ? `Warrior Chat: ${topic}`
+            : `"${selectedPhrase}"`}
+        </h2>
+        <div className="flex space-x-2">
+          {chatMode === "warriors" && (
             <Button 
               variant="outline" 
-              size="sm" 
+              size="icon"
               onClick={toggleConversation}
-              className="border-zinc-700 text-zinc-300"
+              className="text-zinc-400"
             >
-              {conversationPaused ? (
-                <PlayCircle className="w-4 h-4 mr-2" />
-              ) : (
-                <PauseCircle className="w-4 h-4 mr-2" />
-              )}
-              {conversationPaused ? "Resume" : "Pause"}
+              {conversationPaused ? <PlayCircle size={20} /> : <PauseCircle size={20} />}
             </Button>
-            <Button 
-              variant="outline" 
-              size="sm" 
-              onClick={handleRefocus}
-              disabled={isLoading}
-              className="border-zinc-700 text-zinc-300"
-            >
-              <RefreshCw className="w-4 h-4 mr-2" />
-              Refocus
-            </Button>
-            <Button 
-              variant="outline" 
-              size="sm" 
-              onClick={onBack}
-              className="border-zinc-700 text-zinc-300"
-            >
-              Back
-            </Button>
-          </div>
+          )}
+          <Button 
+            variant="outline" 
+            size="icon"
+            onClick={handleRefocus}
+            className="text-zinc-400"
+          >
+            <RefreshCw size={20} />
+          </Button>
         </div>
       </div>
       
-      <div className="flex-1 overflow-y-auto p-4 bg-zinc-950 border-x border-zinc-800 flex flex-col gap-4">
-        {messages.map((msg, index) => {
-          if (msg.warrior === "system") {
-            return (
-              <div key={index} className="text-center py-2">
-                <span className="text-xs text-zinc-500 bg-black px-3 py-1 rounded-full">
-                  {msg.content}
-                </span>
-              </div>
-            );
-          }
-          
-          if (msg.warrior === "user") {
-            return (
-              <div key={index} className="flex justify-end">
-                <div className="bg-zinc-800 p-3 rounded-lg max-w-[80%]">
-                  <p className="text-white">{msg.content}</p>
-                  <p className="text-xs text-zinc-500 mt-1">
-                    You • {msg.timestamp.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}
-                  </p>
+      <div className="flex-1 overflow-y-auto p-4 space-y-4">
+        {messages.map((message, index) => (
+          <div 
+            key={index} 
+            className={`flex ${message.warrior === 'user' ? 'justify-end' : 'justify-start'}`}
+          >
+            <div 
+              className={`rounded-lg px-4 py-2 max-w-[80%] ${
+                message.warrior === 'user' 
+                  ? 'bg-blue-600 text-white' 
+                  : message.warrior === 'system'
+                    ? 'bg-zinc-800 text-zinc-300 italic text-sm'
+                    : 'bg-zinc-800 text-white'
+              }`}
+            >
+              {message.warrior !== 'user' && message.warrior !== 'system' && (
+                <div className="font-bold text-xs text-zinc-400 mb-1">
+                  {getWarriorName(message.warrior)}
                 </div>
+              )}
+              <div className="whitespace-pre-wrap">{message.content}</div>
+            </div>
+          </div>
+        ))}
+        
+        {/* Typing indicator */}
+        {typingWarrior && (
+          <div className="flex justify-start">
+            <div className="rounded-lg px-4 py-2 bg-zinc-800 text-white">
+              <div className="font-bold text-xs text-zinc-400 mb-1">
+                {getWarriorName(typingWarrior)}
               </div>
-            );
-          }
-          
-          const warrior = warriors.find(w => w.id === msg.warrior);
-          if (!warrior) return null;
-          
-          return (
-            <div key={index} className="flex">
-              <div 
-                className="p-3 rounded-lg max-w-[80%]"
-                style={{ backgroundColor: `${warrior.color}20`, borderLeft: `3px solid ${warrior.color}` }}
-              >
-                <p className="font-semibold text-white">{warrior.name}</p>
-                <p className="text-zinc-200">{msg.content}</p>
-                <p className="text-xs text-zinc-400 mt-1">
-                  {msg.timestamp.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}
-                </p>
+              <div className="flex space-x-1">
+                <div className="w-2 h-2 rounded-full bg-zinc-400 animate-pulse"></div>
+                <div className="w-2 h-2 rounded-full bg-zinc-400 animate-pulse delay-150"></div>
+                <div className="w-2 h-2 rounded-full bg-zinc-400 animate-pulse delay-300"></div>
               </div>
             </div>
-          );
-        })}
-        <div ref={messagesEndRef} />
-        
-        {isLoading && typingWarrior && (
-          <div className="text-center">
-            <span className="inline-block px-3 py-1 rounded-full text-xs text-zinc-400">
-              {warriors.find(w => w.id === typingWarrior)?.name || "Warrior"} is thinking...
-            </span>
           </div>
         )}
+        
+        {/* Loading state - shown when initial load is happening */}
+        {isLoading && !typingWarrior && (
+          <div className="flex justify-center py-4">
+            <div className="flex space-x-2">
+              <div className="w-3 h-3 rounded-full bg-zinc-500 animate-pulse"></div>
+              <div className="w-3 h-3 rounded-full bg-zinc-500 animate-pulse delay-150"></div>
+              <div className="w-3 h-3 rounded-full bg-zinc-500 animate-pulse delay-300"></div>
+            </div>
+          </div>
+        )}
+        
+        <div ref={messagesEndRef} />
       </div>
       
-      <div className="p-4 bg-zinc-900/80 border border-zinc-800 rounded-b-lg">
-        <form 
-          onSubmit={(e) => {
-            e.preventDefault();
-            handleSendMessage();
-          }}
-          className="flex gap-2"
-        >
+      <div className="p-4 border-t border-zinc-800">
+        <div className="flex space-x-2">
           <Input
             value={userInput}
             onChange={(e) => setUserInput(e.target.value)}
             placeholder="Join the conversation..."
-            disabled={isLoading}
-            className="bg-zinc-950 border-zinc-800 text-white"
+            className="bg-zinc-900 border-zinc-700 text-white"
+            onKeyDown={(e) => e.key === 'Enter' && handleSendMessage()}
+            disabled={isLoading || isProcessingRef.current}
           />
           <Button 
-            type="submit" 
-            disabled={!userInput.trim() || isLoading}
+            onClick={handleSendMessage}
+            disabled={isLoading || isProcessingRef.current || !userInput.trim()}
+            variant="default"
           >
-            <Send className="h-4 w-4" />
+            <Send size={18} />
           </Button>
-        </form>
+        </div>
       </div>
     </div>
   );
