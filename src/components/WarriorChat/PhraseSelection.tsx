@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
 
@@ -47,6 +47,23 @@ export const PhraseSelection = ({ onStart }: PhraseSelectionProps) => {
     // No topic needed for phrase chat - passing empty string
     onStart(selectedPhrase, "");
   };
+  
+  // Add keyboard event listener for Enter key
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Enter' && selectedPhrase) {
+        handleStart();
+      }
+    };
+    
+    // Add event listener
+    window.addEventListener('keydown', handleKeyDown);
+    
+    // Clean up
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [selectedPhrase]);
 
   return (
     <div className="space-y-6 w-full max-w-3xl mx-auto">

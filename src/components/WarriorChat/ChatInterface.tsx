@@ -3,9 +3,10 @@ import { Warrior } from "@/data/warriors";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { toast } from "sonner";
-import { RefreshCw, Send, PauseCircle, PlayCircle } from "lucide-react";
+import { RefreshCw, Send, PauseCircle, PlayCircle, AlignJustify } from "lucide-react";
 import { createChatCompletion, createWarriorSystemPrompt, createContinuousConversationPrompt, getWarriorWisdom, moderateUserMessage, createPhraseSystemPrompt } from "@/services/openai";
 import { Message } from "@/types/chat";
+import ReactMarkdown from 'react-markdown';
 
 interface ChatInterfaceProps {
   warriors: Warrior[];
@@ -38,6 +39,9 @@ export const ChatInterface = ({ warriors, topic, onBack, chatMode, selectedPhras
     overallSummary: "",
     recentMessages: []
   });
+  
+  // If it's defined as a constant/variable, update the value to 10000 (10 seconds)
+  const WARRIOR_RESPONSE_DELAY = 10000; // Changed from 6000 to 10000 (10 seconds)
   
   // Check for API key when component mounts
   useEffect(() => {
@@ -162,11 +166,12 @@ export const ChatInterface = ({ warriors, topic, onBack, chatMode, selectedPhras
       // Show typing indicator for phrase
       setTypingWarrior("phrase");
       
-      // Get initial reflection from the phrase perspective - with a special introductory prompt
+      // Get initial reflection from the phrase perspective - with a direct explanation prompt
       const initialPrompt = [
         { role: "system" as const, content: phraseSystemPrompt },
-        { role: "system" as const, content: "Introduce yourself as the embodiment of this phrase. Explain what you represent and ask a thoughtful question to start the conversation." },
-        { role: "user" as const, content: "I want to reflect on this phrase. Please introduce yourself and help me understand what it means." }
+        { role: "system" as const, content: "Provide a direct explanation of this phrase. First, explain what the phrase means in 2-3 sentences. Then, provide context for why this concept is important in personal development. Finally, share a specific real-life example that illustrates how this concept can be applied practically. Do not introduce yourself or ask questions." },
+        { role: "system" as const, content: "Do not prefix your response with your name or the phrase name. Just provide your response directly." },
+        { role: "user" as const, content: "I want to understand this phrase. Please explain it, why it's important, and give me a real example." }
       ];
       
       console.log("Sending API request with prompt:", initialPrompt);
@@ -174,7 +179,7 @@ export const ChatInterface = ({ warriors, topic, onBack, chatMode, selectedPhras
       const response = await createChatCompletion({
         messages: initialPrompt,
         temperature: 0.8,
-        max_tokens: 300
+        max_tokens: 500
       });
       
       console.log("Received response:", response);
@@ -185,11 +190,25 @@ export const ChatInterface = ({ warriors, topic, onBack, chatMode, selectedPhras
       // Clear typing indicator
       setTypingWarrior(null);
       
+      // Clean up any name/phrase prefixes
+      let cleanedResponse = response;
+      
+      // Remove patterns like "You vs. You:" prefix
+      const phrasePattern = new RegExp(`^\\s*${selectedPhrase}\\s*:`, 'i');
+      cleanedResponse = cleanedResponse.replace(phrasePattern, '');
+      
+      // Also remove doubled phrase patterns
+      const doublePhrasePattern = new RegExp(`^\\s*${selectedPhrase}\\s*:\\s*${selectedPhrase}\\s*:`, 'i');
+      cleanedResponse = cleanedResponse.replace(doublePhrasePattern, '');
+      
+      // Trim whitespace
+      cleanedResponse = cleanedResponse.trim();
+      
       // Only proceed if we got a non-empty response
-      if (response && response.trim()) {
+      if (cleanedResponse && cleanedResponse.trim()) {
         const firstMessage: Message = {
           warrior: "phrase",
-          content: response,
+          content: cleanedResponse,
           timestamp: new Date()
         };
         
@@ -308,6 +327,8 @@ export const ChatInterface = ({ warriors, topic, onBack, chatMode, selectedPhras
       const formattedMessages = [
         { role: "system" as const, content: systemPrompt },
         { role: "system" as const, content: `When sharing wisdom or advice: ${wisdomPrompt}` },
+        // Add instruction to not prefix response with the warrior's name
+        { role: "system" as const, content: "Do not prefix your response with your name or role. Just provide your response directly." },
         ...contextMessages.map(msg => {
           if (msg.warrior === "system") {
             return { role: "system" as const, content: msg.content };
@@ -342,7 +363,22 @@ export const ChatInterface = ({ warriors, topic, onBack, chatMode, selectedPhras
         max_tokens: 300
       });
       
-      return response;
+      // Clean up any remaining warrior name prefixes that might still be in the response
+      let cleanedResponse = response;
+      
+      // Remove patterns like "Alexander the Great:" or "Miyamoto Musashi:"
+      const warriorName = warrior.name;
+      const namePattern = new RegExp(`^\\s*${warriorName}\\s*:`, 'i');
+      cleanedResponse = cleanedResponse.replace(namePattern, '');
+      
+      // Also remove patterns where the name appears twice
+      const doubleNamePattern = new RegExp(`^\\s*${warriorName}\\s*:\\s*${warriorName}\\s*:`, 'i');
+      cleanedResponse = cleanedResponse.replace(doubleNamePattern, '');
+      
+      // Trim whitespace
+      cleanedResponse = cleanedResponse.trim();
+      
+      return cleanedResponse;
     } catch (error) {
       console.error("Error getting warrior response:", error);
       return "I apologize, but I am unable to respond at the moment.";
@@ -361,6 +397,8 @@ export const ChatInterface = ({ warriors, topic, onBack, chatMode, selectedPhras
       // Format messages for the OpenAI API
       const formattedMessages = [
         { role: "system" as const, content: phraseSystemPrompt },
+        // Add instruction not to prefix the response with the phrase name
+        { role: "system" as const, content: "Do not prefix your response with your name or role. Just provide your response directly." },
         ...contextMessages.map(msg => {
           if (msg.warrior === "system") {
             return { role: "system" as const, content: msg.content };
@@ -383,10 +421,24 @@ export const ChatInterface = ({ warriors, topic, onBack, chatMode, selectedPhras
       const response = await createChatCompletion({
         messages: formattedMessages,
         temperature: 0.8,
-        max_tokens: 300
+        max_tokens: 500
       });
       
-      return response;
+      // Clean up any name/phrase prefixes
+      let cleanedResponse = response;
+      
+      // Remove patterns like "You vs. You:" prefix
+      const phrasePattern = new RegExp(`^\\s*${selectedPhrase}\\s*:`, 'i');
+      cleanedResponse = cleanedResponse.replace(phrasePattern, '');
+      
+      // Also remove doubled phrase patterns
+      const doublePhrasePattern = new RegExp(`^\\s*${selectedPhrase}\\s*:\\s*${selectedPhrase}\\s*:`, 'i');
+      cleanedResponse = cleanedResponse.replace(doublePhrasePattern, '');
+      
+      // Trim whitespace
+      cleanedResponse = cleanedResponse.trim();
+      
+      return cleanedResponse;
     } catch (error) {
       console.error("Error getting phrase response:", error);
       return "I'm reflecting on this, but need a moment to gather my thoughts.";
@@ -722,27 +774,29 @@ export const ChatInterface = ({ warriors, topic, onBack, chatMode, selectedPhras
         </div>
       </div>
       
-      <div className="flex-1 overflow-y-auto p-4 space-y-4">
+      <div className="flex-1 overflow-y-auto p-4 space-y-3">
         {messages.map((message, index) => (
           <div 
             key={index} 
             className={`flex ${message.warrior === 'user' ? 'justify-end' : 'justify-start'}`}
           >
             <div 
-              className={`rounded-lg px-4 py-2 max-w-[80%] ${
+              className={`rounded-lg px-3 py-1.5 max-w-[80%] ${
                 message.warrior === 'user' 
                   ? 'bg-blue-600 text-white' 
                   : message.warrior === 'system'
-                    ? 'bg-zinc-800 text-zinc-300 italic text-sm'
+                    ? 'bg-zinc-800 text-zinc-300 italic text-base'
                     : 'bg-zinc-800 text-white'
               }`}
             >
               {message.warrior !== 'user' && message.warrior !== 'system' && (
-                <div className="font-bold text-xs text-zinc-400 mb-1">
+                <div className="font-bold text-sm text-zinc-400 mb-0.5">
                   {getWarriorName(message.warrior)}
                 </div>
               )}
-              <div className="whitespace-pre-wrap">{message.content}</div>
+              <div className="whitespace-pre-wrap prose prose-invert max-w-none [&_strong]:text-white [&_strong]:font-bold [&_em]:text-zinc-300 [&_ul]:pl-5 [&_ol]:pl-5 [&_li]:mb-0.5 [&_h1]:text-xl [&_h1]:mb-1 [&_h2]:text-lg [&_h2]:mb-1 [&_h3]:text-base [&_h3]:mb-1 [&_p]:mb-1 [&_a]:text-blue-400 [&_a]:underline [&_blockquote]:border-l-2 [&_blockquote]:border-zinc-600 [&_blockquote]:pl-2 [&_blockquote]:italic [&_blockquote]:text-zinc-300 [&_ul]:my-1 [&_ol]:my-1 [&_p+p]:mt-1 [&_p+ul]:mt-1 [&_p+ol]:mt-1 [&_hr]:my-2">
+                <ReactMarkdown>{message.content}</ReactMarkdown>
+              </div>
             </div>
           </div>
         ))}
@@ -750,8 +804,8 @@ export const ChatInterface = ({ warriors, topic, onBack, chatMode, selectedPhras
         {/* Typing indicator */}
         {typingWarrior && (
           <div className="flex justify-start">
-            <div className="rounded-lg px-4 py-2 bg-zinc-800 text-white">
-              <div className="font-bold text-xs text-zinc-400 mb-1">
+            <div className="rounded-lg px-3 py-1.5 bg-zinc-800 text-white">
+              <div className="font-bold text-sm text-zinc-400 mb-0.5">
                 {getWarriorName(typingWarrior)}
               </div>
               <div className="flex space-x-1">
