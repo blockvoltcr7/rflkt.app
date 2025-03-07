@@ -4,12 +4,12 @@ import { useNavigate } from "react-router-dom";
 import { PlaceholdersAndVanishInput } from "@/components/ui/placeholders-and-vanish-input";
 import { TextHoverEffect } from "@/components/ui/text-hover-effect";
 import { toast } from "sonner";
-
-// The secret passphrase to access the application
-const SECRET_PASSPHRASE = "reflect";
+import { supabase } from "@/integrations/supabase/client";
 
 const Auth = () => {
   const [inputValue, setInputValue] = useState("");
+  const [secretPassphrase, setSecretPassphrase] = useState("");
+  const [isLoading, setIsLoading] = useState(true);
   const navigate = useNavigate();
   const [attempts, setAttempts] = useState(0);
 
@@ -21,6 +21,35 @@ const Auth = () => {
     "Waiting for passphrase...",
   ];
 
+  // Fetch the secret passphrase from Supabase
+  useEffect(() => {
+    const fetchSecretPassphrase = async () => {
+      try {
+        setIsLoading(true);
+        const { data, error } = await supabase
+          .from('app_settings')
+          .select('value')
+          .eq('key', 'secret_passphrase')
+          .single();
+        
+        if (error) {
+          console.error("Error fetching passphrase:", error);
+          toast.error("Error connecting to server", {
+            description: "Please try again later",
+          });
+        } else if (data) {
+          setSecretPassphrase(data.value);
+        }
+      } catch (err) {
+        console.error("Unexpected error:", err);
+      } finally {
+        setIsLoading(false);
+      }
+    };
+
+    fetchSecretPassphrase();
+  }, []);
+
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     setInputValue(e.target.value);
   };
@@ -28,7 +57,14 @@ const Auth = () => {
   const onSubmit = (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     
-    if (inputValue.toLowerCase() === SECRET_PASSPHRASE) {
+    if (isLoading) {
+      toast.error("Please wait", {
+        description: "Still connecting to server...",
+      });
+      return;
+    }
+    
+    if (inputValue.toLowerCase() === secretPassphrase.toLowerCase()) {
       // Correct passphrase, set authenticated to true in localStorage
       localStorage.setItem("authenticated", "true");
       
@@ -78,11 +114,15 @@ const Auth = () => {
         </div>
         
         <div className="mt-8">
-          <PlaceholdersAndVanishInput
-            placeholders={placeholders}
-            onChange={handleChange}
-            onSubmit={onSubmit}
-          />
+          {isLoading ? (
+            <div className="text-center text-sm text-gray-500">Loading...</div>
+          ) : (
+            <PlaceholdersAndVanishInput
+              placeholders={placeholders}
+              onChange={handleChange}
+              onSubmit={onSubmit}
+            />
+          )}
         </div>
         
         <div className="mt-6 text-center text-xs text-gray-400">
