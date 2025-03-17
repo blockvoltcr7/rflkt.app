@@ -4,9 +4,10 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { toast } from "sonner";
 import { RefreshCw, Send, PauseCircle, PlayCircle, AlignJustify } from "lucide-react";
-import { createChatCompletion, createWarriorSystemPrompt, createContinuousConversationPrompt, getWarriorWisdom, moderateUserMessage, createPhraseSystemPrompt } from "@/services/openai";
+import { createChatCompletion, createWarriorSystemPrompt, createContinuousConversationPrompt, getWarriorWisdom, moderateUserMessage, createPhraseSystemPrompt } from "@/services/ai";
 import { Message } from "@/types/chat";
 import ReactMarkdown from 'react-markdown';
+import { getModelConfig } from "@/services/modelConfig";
 
 interface ChatInterfaceProps {
   warriors: Warrior[];
@@ -43,17 +44,33 @@ export const ChatInterface = ({ warriors, topic, onBack, chatMode, selectedPhras
   // If it's defined as a constant/variable, update the value to 10000 (10 seconds)
   const WARRIOR_RESPONSE_DELAY = 10000; // Changed from 6000 to 10000 (10 seconds)
   
-  // Check for API key when component mounts
+  // Check for API keys when component mounts
   useEffect(() => {
-    // Check if API key is set
-    if (!import.meta.env.VITE_OPENAI_API_KEY) {
+    const config = getModelConfig();
+    
+    // Check if API keys are set
+    if (!import.meta.env.VITE_OPENAI_API_KEY && config.provider === 'openai') {
       console.error("OpenAI API key is missing. Please add it to .env file.");
-      toast.error("API key missing. Chat functionality will not work.");
+      toast.error("OpenAI API key missing. Chat functionality will not work.");
       
       // Add a system error message
       const errorMessage: Message = {
         warrior: "system",
         content: "OpenAI API key is missing. Please add it to the .env file to use the chat functionality.",
+        timestamp: new Date()
+      };
+      
+      setMessages(prev => [...prev, errorMessage]);
+    }
+    
+    if (!import.meta.env.VITE_OPENROUTER_API_KEY && config.provider === 'gemma') {
+      console.error("OpenRouter API key is missing. Please add it to .env file.");
+      toast.error("OpenRouter API key missing. Gemma model will not work.");
+      
+      // Add a system error message
+      const errorMessage: Message = {
+        warrior: "system",
+        content: "OpenRouter API key is missing. Please add it to the .env file to use the Gemma model.",
         timestamp: new Date()
       };
       
@@ -179,7 +196,8 @@ export const ChatInterface = ({ warriors, topic, onBack, chatMode, selectedPhras
       const response = await createChatCompletion({
         messages: initialPrompt,
         temperature: 0.8,
-        max_tokens: 500
+        max_tokens: 500,
+        model: getModelConfig().model
       });
       
       console.log("Received response:", response);
@@ -325,7 +343,10 @@ export const ChatInterface = ({ warriors, topic, onBack, chatMode, selectedPhras
       
       // Format messages for the OpenAI API
       const formattedMessages = [
-        { role: "system" as const, content: systemPrompt },
+        { 
+          role: "system" as const, 
+          content: `${systemPrompt}\n\nIMPORTANT: You are ONLY speaking as ${warrior.name}. Do NOT generate responses for other warriors or continue the conversation beyond your single response. Respond ONLY from ${warrior.name}'s perspective.` 
+        },
         { role: "system" as const, content: `When sharing wisdom or advice: ${wisdomPrompt}` },
         // Add instruction to not prefix response with the warrior's name
         { role: "system" as const, content: "Do not prefix your response with your name or role. Just provide your response directly." },
@@ -360,29 +381,49 @@ export const ChatInterface = ({ warriors, topic, onBack, chatMode, selectedPhras
       const response = await createChatCompletion({
         messages: formattedMessages,
         temperature: 0.8,
-        max_tokens: 300
+        max_tokens: 300,
+        model: getModelConfig().model
       });
       
-      // Clean up any remaining warrior name prefixes that might still be in the response
+      // Process the response to ensure it only contains the current warrior's message
       let cleanedResponse = response;
       
-      // Remove patterns like "Alexander the Great:" or "Miyamoto Musashi:"
-      const warriorName = warrior.name;
-      const namePattern = new RegExp(`^\\s*${warriorName}\\s*:`, 'i');
-      cleanedResponse = cleanedResponse.replace(namePattern, '');
+      // Remove any "Warrior:" prefixes that might have been generated
+      cleanedResponse = cleanedResponse.replace(new RegExp(`^(${warrior.name}|${warrior.name.split(' ')[0]}):?\\s*`, 'i'), '');
       
-      // Also remove patterns where the name appears twice
-      const doubleNamePattern = new RegExp(`^\\s*${warriorName}\\s*:\\s*${warriorName}\\s*:`, 'i');
-      cleanedResponse = cleanedResponse.replace(doubleNamePattern, '');
-      
-      // Trim whitespace
-      cleanedResponse = cleanedResponse.trim();
+      // Remove any other warrior responses that might be in the text
+      const otherWarriors = warriors
+        .filter(w => w.id !== warrior.id)
+        .map(w => w.name);
+        
+      for (const otherWarrior of otherWarriors) {
+        // Look for patterns like "OtherWarrior:" or "OtherWarrior's first name:"
+        const pattern = new RegExp(`(^|\\n)${otherWarrior}:?\\s*|\\n${otherWarrior.split(' ')[0]}:?\\s*`, 'i');
+        if (pattern.test(cleanedResponse)) {
+          // Cut off the response at this point
+          cleanedResponse = cleanedResponse.split(pattern)[0].trim();
+        }
+      }
       
       return cleanedResponse;
     } catch (error) {
-      console.error("Error getting warrior response:", error);
-      return "I apologize, but I am unable to respond at the moment.";
+      console.error("Failed to get warrior response:", error);
+      return fallbackWarriorResponse(warrior);
     }
+  };
+  
+  // Generate a fallback response if the API call fails
+  const fallbackWarriorResponse = (warrior: Warrior): string => {
+    const fallbacks = {
+      "musashi": "The path of the warrior is found through discipline and self-reflection. What specific insight do you seek?",
+      "alexander": "A true leader must balance wisdom with courage. I am curious to hear more about your thoughts on this matter.",
+      "joan": "Faith guides my actions in times of uncertainty. How may I assist you on your journey?",
+      "leonidas": "Strength comes not just from the individual, but from unity and dedication to a cause greater than oneself.",
+      "hannibal": "Strategy requires patience and foresight. Let us discuss this further if you wish to learn more."
+    };
+    
+    return fallbacks[warrior.id as keyof typeof fallbacks] || 
+      `As ${warrior.name}, I would be interested in continuing our conversation. Please ask me something specific about my experiences or philosophy.`;
   };
   
   // Function to get response from a phrase perspective
@@ -420,8 +461,9 @@ export const ChatInterface = ({ warriors, topic, onBack, chatMode, selectedPhras
       // Call OpenAI API
       const response = await createChatCompletion({
         messages: formattedMessages,
-        temperature: 0.8,
-        max_tokens: 500
+        temperature: 0.7,
+        max_tokens: 500,
+        model: getModelConfig().model
       });
       
       // Clean up any name/phrase prefixes
@@ -699,7 +741,8 @@ export const ChatInterface = ({ warriors, topic, onBack, chatMode, selectedPhras
       const summary = await createChatCompletion({
         messages: summaryPrompt,
         temperature: 0.5,
-        max_tokens: 150
+        max_tokens: 150,
+        model: getModelConfig().model
       });
       
       return summary;
@@ -740,6 +783,160 @@ export const ChatInterface = ({ warriors, topic, onBack, chatMode, selectedPhras
     
     summarizeConversation();
   }, [messages]);
+
+  // Process a message to extract any multi-warrior conversations
+  const processMultiWarriorResponse = (content: string, warriors: Warrior[]): { warrior: string, content: string }[] => {
+    // First check if this looks like a multi-warrior conversation
+    const responses: { warrior: string, content: string }[] = [];
+    
+    // Try to detect patterns like "Warrior Name: text" or "Warrior Name's first name: text"
+    const warriorNames = warriors.map(w => ({
+      id: w.id,
+      name: w.name,
+      firstName: w.name.split(' ')[0]
+    }));
+    
+    // Check if content contains any warrior name patterns
+    const currentContent = content;
+    let currentWarrior: string | null = null;
+    
+    // Build a regex pattern for all warrior names
+    const namePatterns = warriorNames.map(w => 
+      `(^|\\n)(${w.name}|${w.firstName}):`
+    ).join('|');
+    
+    const nameRegex = new RegExp(namePatterns, 'i');
+    
+    // If we don't find any warrior name patterns, return empty array
+    if (!nameRegex.test(currentContent)) {
+      return [];
+    }
+    
+    // Otherwise, split the content by warrior names
+    for (const warrior of warriorNames) {
+      const pattern = new RegExp(`(^|\\n)(${warrior.name}|${warrior.firstName}):`, 'i');
+      const matches = [...currentContent.matchAll(new RegExp(pattern, 'gi'))];
+      
+      for (const match of matches) {
+        const startIndex = match.index || 0;
+        currentWarrior = warrior.id;
+        
+        // Find the next warrior name match
+        const remainingContent = currentContent.slice(startIndex + match[0].length);
+        const nextMatch = nameRegex.exec(remainingContent);
+        const endIndex = nextMatch 
+          ? startIndex + match[0].length + nextMatch.index
+          : currentContent.length;
+        
+        // Extract this warrior's content
+        const warriorContent = currentContent
+          .slice(startIndex + match[0].length, endIndex)
+          .trim();
+        
+        responses.push({
+          warrior: currentWarrior,
+          content: warriorContent
+        });
+      }
+    }
+    
+    return responses;
+  };
+
+  // Find the actual getContinuousConversation function and update it to use the multi-warrior processor
+  const getContinuousConversation = async () => {
+    if (conversationPaused || isProcessingRef.current) return;
+    isProcessingRef.current = true;
+    
+    try {
+      // Choose a random warrior to respond next
+      const nextWarrior = warriors[nextWarriorIndex % warriors.length];
+      setNextWarriorIndex(prev => prev + 1);
+      
+      // Use the last N messages as context
+      const recentMessages = [...messages].slice(-10);
+      
+      // Show typing indicator
+      setTypingWarrior(nextWarrior.id);
+      
+      // Format messages for the API
+      const apiMessages = formatMessagesForAPI(recentMessages);
+      
+      // Create a continuous conversation prompt
+      const conversationPrompt = createContinuousConversationPrompt(recentMessages, warriors, topic);
+      
+      // Format for the OpenAI API
+      const formattedMessages = [
+        { role: "system" as const, content: conversationPrompt },
+        ...apiMessages
+      ];
+      
+      console.log("Continuous conversation prompt:", conversationPrompt);
+      
+      // Get the AI response
+      const response = await createChatCompletion({
+        messages: formattedMessages,
+        temperature: 0.7,
+        max_tokens: 500,
+        model: getModelConfig().model
+      });
+      
+      // First try to detect if this is a multi-warrior conversation that slipped through
+      const multiWarriorResponses = processMultiWarriorResponse(response, warriors);
+      
+      if (multiWarriorResponses.length > 0) {
+        console.log("Detected and split multi-warrior response:", multiWarriorResponses);
+        
+        // Add each warrior's response separately
+        for (const resp of multiWarriorResponses) {
+          const responseMessage: Message = {
+            warrior: resp.warrior,
+            content: resp.content,
+            timestamp: new Date()
+          };
+          
+          setMessages(prev => [...prev, responseMessage]);
+        }
+        setTypingWarrior(null);
+      } else {
+        // Add the warrior response as a message
+        const message: Message = {
+          warrior: nextWarrior.id,
+          content: response,
+          timestamp: new Date()
+        };
+        
+        setMessages(prev => [...prev, message]);
+        setTypingWarrior(null);
+      }
+      
+      // Schedule the next response after a delay
+      setTimeout(() => {
+        if (!conversationPaused) {
+          getContinuousConversation();
+        }
+      }, WARRIOR_RESPONSE_DELAY);
+    } catch (error) {
+      console.error("Error in continuous conversation:", error);
+      setTypingWarrior(null);
+    } finally {
+      isProcessingRef.current = false;
+    }
+  };
+
+  // Add the formatMessagesForAPI function
+  const formatMessagesForAPI = (messages: Message[]) => {
+    return messages.map(msg => {
+      if (msg.warrior === "user") {
+        return { role: "user" as const, content: msg.content };
+      } else if (msg.warrior === "system") {
+        return { role: "system" as const, content: msg.content };
+      } else {
+        // Message from warrior
+        return { role: "assistant" as const, content: msg.content };
+      }
+    });
+  };
 
   return (
     <div className="flex flex-col h-screen max-h-[800px]">

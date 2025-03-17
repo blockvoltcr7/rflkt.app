@@ -5,8 +5,9 @@ import { Input } from "@/components/ui/input";
 import { X, Send, ChevronRight, ChevronLeft } from "lucide-react";
 import { Message } from "@/types/chat";
 import ReactMarkdown from 'react-markdown';
-import { createChatCompletion, createWarriorSystemPrompt, moderateUserMessage } from "@/services/openai";
+import { createChatCompletion, createWarriorSystemPrompt, moderateUserMessage } from "@/services/ai";
 import { toast } from "sonner";
+import { getModelConfig } from "@/services/modelConfig";
 
 interface SideChatPanelProps {
   warrior: Warrior;
@@ -17,6 +18,26 @@ interface SideChatPanelProps {
 interface ChatMessage extends Message {
   id: string;
 }
+
+// Add this force refresh function that guarantees we're using the current config
+const forceRefreshConfig = () => {
+  // Attempt to re-initialize the model config
+  try {
+    // First make sure localStorage is properly set with the current model info
+    const config = getModelConfig();
+    console.log("Current config:", config);
+    localStorage.setItem('rflkt_model_config', JSON.stringify(config));
+    
+    // Force re-read from localStorage
+    const savedConfig = localStorage.getItem('rflkt_model_config');
+    console.log("Saved config:", savedConfig);
+    
+    // Log verification
+    console.log("Config verification:", getModelConfig());
+  } catch (error) {
+    console.error("Failed to refresh config:", error);
+  }
+};
 
 export const SideChatPanel = ({ warrior, onClose }: SideChatPanelProps) => {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -32,9 +53,15 @@ export const SideChatPanel = ({ warrior, onClose }: SideChatPanelProps) => {
   // Initialize the chat with a greeting from the warrior
   useEffect(() => {
     const initializeChat = async () => {
+      // Force refresh config at initialization
+      forceRefreshConfig();
+      
       // Create the system prompt for this warrior
-      const systemPrompt = createWarriorSystemPrompt(warrior, "");
+      const systemPrompt = createWarriorSystemPrompt(warrior, "personal conversation");
       warriorContext.current = { systemPrompt, warrior };
+      
+      // Log config for debugging
+      console.log("SideChatPanel - Current model config:", getModelConfig());
       
       // Add a greeting message from the warrior
       try {
@@ -43,7 +70,9 @@ export const SideChatPanel = ({ warrior, onClose }: SideChatPanelProps) => {
           messages: [
             { role: "system", content: systemPrompt },
             { role: "user", content: `Please introduce yourself briefly as ${warrior.name} and welcome me to the conversation.` }
-          ]
+          ],
+          temperature: 0.8,
+          max_tokens: 300
         });
         
         setMessages([
@@ -97,50 +126,48 @@ export const SideChatPanel = ({ warrior, onClose }: SideChatPanelProps) => {
     setIsLoading(true);
     
     try {
-      // Check content moderation
-      const hasConcerningContent = moderateUserMessage(userInput);
-      if (hasConcerningContent) {
-        setIsLoading(false);
-        toast.error("I notice you may be discussing concerning topics. If you need support, please reach out to appropriate resources.");
-        
-        // Add a supportive system message
-        const supportMessage: ChatMessage = {
-          id: Date.now().toString(),
-          content: "I notice you're expressing thoughts that concern me. If you're experiencing a crisis, please consider contacting a mental health professional or crisis line: National Suicide Prevention Lifeline: 988 or 1-800-273-8255",
-          warrior: "system",
-          timestamp: new Date(),
-        };
-        
-        setMessages(prev => [...prev, supportMessage]);
-        return;
-      }
+      // Log config and request details for debugging
+      const config = getModelConfig();
+      console.log("SideChatPanel - Sending message with config:", config);
       
-      // Format conversation history for API
-      const apiMessages = messages.map(m => {
-        if (m.warrior === "user") {
-          return { role: "user" as const, content: m.content };
-        } else {
-          return { role: "assistant" as const, content: m.content };
-        }
-      });
+      const systemPrompt = createWarriorSystemPrompt(warrior, "personal conversation");
       
-      // Get warrior response
+      // Add explicit instructions to respond ONLY as the current warrior
+      const enhancedSystemPrompt = `${systemPrompt}\n\nIMPORTANT: You are ONLY speaking as ${warrior.name}. Do NOT generate responses for other warriors or continue the conversation beyond your single response. Respond ONLY from ${warrior.name}'s perspective.`;
+      
       const response = await createChatCompletion({
         messages: [
-          { role: "system", content: warriorContext.current.systemPrompt },
-          ...apiMessages,
+          { role: "system", content: enhancedSystemPrompt },
+          ...messages.map(m => {
+            if (m.warrior === "user") {
+              return { role: "user" as const, content: m.content };
+            } else {
+              return { role: "assistant" as const, content: m.content };
+            }
+          }),
           { role: "user", content: userInput }
-        ]
+        ],
+        temperature: 0.8,
+        max_tokens: 300
       });
+      
+      // Log successful response
+      console.log("SideChatPanel - Received response:", response ? response.substring(0, 50) + "..." : "No response");
+      
+      // Process the response to ensure it only contains this warrior's message
+      let cleanedResponse = response;
+      
+      // Remove any "Warrior:" prefixes that might have been generated
+      cleanedResponse = cleanedResponse.replace(new RegExp(`^(${warrior.name}|${warrior.name.split(' ')[0]}):?\\s*`, 'i'), '');
       
       // Provide a fallback response for common questions if API fails
       const fallbackResponse = generateFallbackResponse(userInput, warrior);
       
-      if (response) {
+      if (cleanedResponse) {
         // Add warrior response
         const warriorMessage: ChatMessage = {
           id: Date.now().toString(),
-          content: response,
+          content: cleanedResponse,
           warrior: warrior.id,
           timestamp: new Date(),
         };

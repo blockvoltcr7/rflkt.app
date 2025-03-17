@@ -14,6 +14,8 @@ export interface Warrior {
   achievements: string[];
 }
 
+
+
 export const warriors: Warrior[] = [
   {
     id: "musashi",

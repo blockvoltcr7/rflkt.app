@@ -1,11 +1,13 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { TextHoverEffect } from "@/components/ui/text-hover-effect";
-import { BookOpen, MessageCircle, HistoryIcon, User } from "lucide-react";
+import { BookOpen, MessageCircle, HistoryIcon, User, Settings } from "lucide-react";
+import { isAdminMode } from "@/services/modelConfig";
 
 const Dashboard = () => {
   const navigate = useNavigate();
+  const [isAdmin, setIsAdmin] = useState(false);
 
   // Check if user is authenticated
   useEffect(() => {
@@ -13,6 +15,9 @@ const Dashboard = () => {
     if (!isAuthenticated) {
       navigate("/");
     }
+    
+    // Check admin mode
+    setIsAdmin(isAdminMode());
   }, [navigate]);
 
   const handleLogout = () => {
@@ -28,13 +33,26 @@ const Dashboard = () => {
             <TextHoverEffect text="RFLKT" />
           </div>
           
-          <Button 
-            onClick={handleLogout}
-            variant="outline"
-            className="border-zinc-700 hover:bg-zinc-800"
-          >
-            Logout
-          </Button>
+          <div className="flex gap-4">
+            {isAdmin && (
+              <Button
+                onClick={() => navigate("/admin/models")}
+                variant="outline"
+                className="border-zinc-700 hover:bg-zinc-800 flex items-center gap-2"
+              >
+                <Settings size={16} />
+                Admin Settings
+              </Button>
+            )}
+            
+            <Button 
+              onClick={handleLogout}
+              variant="outline"
+              className="border-zinc-700 hover:bg-zinc-800"
+            >
+              Logout
+            </Button>
+          </div>
         </div>
         
         <div className="text-center mb-16">

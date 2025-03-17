@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { WarriorChat as WarriorChatComponent } from "@/components/WarriorChat/WarriorChat";
 import { TextHoverEffect } from "@/components/ui/text-hover-effect";
 import { ChevronLeft } from "lucide-react";
+import { AdminButton } from "@/components/Admin/AdminButton";
 
 const WarriorChatPage = () => {
   const navigate = useNavigate();
@@ -58,6 +59,9 @@ const WarriorChatPage = () => {
         </div>
         
         <WarriorChatComponent />
+        
+        {/* Admin Button */}
+        <AdminButton />
       </div>
     </div>
   );

@@ -9,7 +9,11 @@ import NotFound from "./pages/NotFound";
 import WarriorProfile from "./pages/WarriorProfile";
 import WarriorDirectory from "./pages/WarriorDirectory";
 import WarriorChatPage from "./pages/WarriorChat";
+import AdminModelConfigPage from "./pages/AdminModelConfig";
 import { ThemeProvider } from "@/components/ui/theme-provider";
+
+// Import the validator (side effect runs on import)
+import "@/services/configValidator";
 
 const queryClient = new QueryClient();
 
@@ -26,6 +30,7 @@ const App = () => (
             <Route path="/warriors" element={<WarriorDirectory />} />
             <Route path="/warrior/:warriorId" element={<WarriorProfile />} />
             <Route path="/chat" element={<WarriorChatPage />} />
+            <Route path="/admin/models" element={<AdminModelConfigPage />} />
             {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
             <Route path="*" element={<NotFound />} />
           </Routes>

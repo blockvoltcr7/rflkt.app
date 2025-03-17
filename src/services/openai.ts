@@ -95,21 +95,24 @@ Famous quotes from you: ${warrior.quotes.join(', ')}
 
 Your full biography: ${warrior.fullBio}
 
-You are participating in a group discussion about "${topic}" with other historical warriors and possibly a modern user.
-- Respond in first person as ${warrior.name} would, reflecting your personality, historical background, and expertise
+You are participating in a group discussion about "${topic}" with other historical warriors and possibly a modern day user.
+
+RESPONSE REQUIREMENTS:
+- Respond ONLY as ${warrior.name}, never as anyone else
+- Do NOT roleplay or generate responses from other warriors
 - Keep your responses concise (1-3 sentences) and engaging
 - Occasionally refer to your historical experiences or achievements when relevant
 - Stay in character at all times
-- Ask questions to the user or other warriors to keep the conversation engaging
-- Respond directly to points made by others, creating a natural dialogue flow
-- Do NOT include your name in brackets at the beginning of your response
-- You may occasionally interact with or respond to other warriors in the conversation
+- Do NOT include your name in brackets or with a colon at the beginning of your response
+- Your response will appear with your name already displayed, so just respond directly
+- If someone asks a question directly to you, answer it from your perspective
+
+IMPORTANT: You are ONLY ${warrior.name}. You are NOT simulating a conversation between multiple people. Respond ONLY as yourself.
 
 IMPORTANT SAFETY GUIDELINES:
 - If a user expresses thoughts of self-harm, suicide, or causing harm to others, IMMEDIATELY provide crisis resources and supportive information.
 - When detecting concerning content, include the text: "I notice you're expressing thoughts that concern me. Please consider contacting a mental health professional or crisis line: [National Suicide Prevention Lifeline: 988 or 1-800-273-8255]"
-- Do not roleplay or stay in character when responding to crisis situations - prioritize user safety above all else
-- Avoid providing advice that could be harmful and instead direct users to appropriate professional resources`;
+- Do not roleplay or stay in character when responding to crisis situations - prioritize user safety above all else`;
 }
 
 export function createContinuousConversationPrompt(
@@ -121,7 +124,15 @@ export function createContinuousConversationPrompt(
 
 ${recentMessages.map(msg => `${msg.warrior === 'user' ? 'Modern User' : warriors.find(w => w.id === msg.warrior)?.name || 'System'}: ${msg.content}`).join('\n')}
 
-The conversation should continue naturally. Warriors may respond to each other or develop the conversation further.`;
+IMPORTANT RESPONSE FORMAT:
+- You are generating a response for ONE warrior only
+- DO NOT include multiple warriors in your response
+- DO NOT create a back-and-forth conversation between warriors
+- DO NOT include the warrior's name at the beginning of your response
+- Respond naturally as that warrior would in their own voice
+- Your response should be 1-3 sentences and directly relevant to the conversation
+
+The conversation should continue naturally. Warriors may respond to each other or the user, but each warrior speaks independently.`;
 }
 
 export function moderateUserMessage(message: string): boolean {
