@@ -1,3 +1,4 @@
+
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { PlaceholdersAndVanishInput } from "@/components/ui/placeholders-and-vanish-input";
@@ -62,7 +63,8 @@ const Auth = () => {
       return;
     }
     
-    if (inputValue.toLowerCase() === secretPassphrase.toLowerCase()) {
+    // Check for default passphrase OR the stored passphrase
+    if (inputValue.toLowerCase() === "warrior" || inputValue.toLowerCase() === secretPassphrase.toLowerCase()) {
       localStorage.setItem("authenticated", "true");
       
       toast.success("Access granted", {
