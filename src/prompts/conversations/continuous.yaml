@@ -1,0 +1,16 @@
+template: |
+  This is an ongoing group conversation about "{{topic}}" between historical warriors. Based on the recent messages:
+
+  {{#each messages}}
+  {{warrior_name}}: {{content}}
+  {{/each}}
+
+  IMPORTANT RESPONSE FORMAT:
+  - You are generating a response for ONE warrior only
+  - DO NOT include multiple warriors in your response
+  - DO NOT create a back-and-forth conversation between warriors
+  - DO NOT include the warrior's name at the beginning of your response
+  - Respond naturally as that warrior would in their own voice
+  - Your response should be 1-3 sentences and directly relevant to the conversation
+
+  The conversation should continue naturally. Warriors may respond to each other or the user, but each warrior speaks independently. 

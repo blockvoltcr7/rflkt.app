@@ -1,5 +1,36 @@
 import OpenAI from 'openai';
 import { Warrior } from "@/data/warriors";
+import { loadYamlFile, interpolateTemplate } from '@/utils/yaml';
+import path from 'path';
+
+// Define paths to prompt templates
+const PROMPT_PATHS = {
+  BASE_SAFETY: 'base/safety_guidelines.yaml',
+  BASE_PHRASE: 'phrases/base.yaml',
+  SPECIFIC_PHRASES: 'phrases/specific',
+  BASE_WARRIOR: 'warriors/base.yaml',
+  SPECIFIC_WARRIORS: 'warriors/specific',
+  CONTINUOUS_CONV: 'conversations/continuous.yaml'
+} as const;
+
+/**
+ * Loads and caches YAML templates to avoid repeated disk reads
+ */
+class PromptTemplateCache {
+  private static cache: Map<string, any> = new Map();
+
+  static async get(templatePath: string): Promise<any> {
+    if (!this.cache.has(templatePath)) {
+      const fullPath = path.join(process.cwd(), 'src/prompts', templatePath);
+      this.cache.set(templatePath, await loadYamlFile(fullPath));
+    }
+    return this.cache.get(templatePath);
+  }
+
+  static clear(): void {
+    this.cache.clear();
+  }
+}
 
 // Define Message type locally to avoid circular dependencies
 interface Message {
@@ -14,6 +45,7 @@ const openai = new OpenAI({
   apiKey: import.meta.env.VITE_OPENAI_API_KEY,
   dangerouslyAllowBrowser: true // For client-side use - consider server-side implementation for production
 });
+
 
 interface ChatCompletionOptions {
   messages: Array<{
@@ -85,65 +117,97 @@ export async function createChatCompletion({
   }
 }
 
-export function createWarriorSystemPrompt(warrior: Warrior, topic: string): string {
-  return `You are ${warrior.name}, a ${warrior.shortDesc} from ${warrior.era} ${warrior.region}.
+/**
+ * Creates a system prompt for a specific warrior
+ * @param warrior - The warrior object containing character details
+ * @param topic - The conversation topic
+ */
+export async function createWarriorSystemPrompt(warrior: Warrior, topic: string): Promise<string> {
+  const baseTemplate = await PromptTemplateCache.get(PROMPT_PATHS.BASE_WARRIOR);
+  let specificTemplate = {};
+  
+  try {
+    specificTemplate = await PromptTemplateCache.get(
+      path.join(PROMPT_PATHS.SPECIFIC_WARRIORS, `${warrior.id}.yaml`)
+    );
+  } catch (error) {
+    console.warn(`No specific template found for warrior ${warrior.id}`);
+  }
 
-Your personality traits: ${warrior.personality}
-Your specialty: ${warrior.specialty}
-Your notable achievements: ${warrior.achievements.join(', ')}
-Famous quotes from you: ${warrior.quotes.join(', ')}
-
-Your full biography: ${warrior.fullBio}
-
-You are participating in a group discussion about "${topic}" with other historical warriors and possibly a modern day user.
-
-RESPONSE REQUIREMENTS:
-- Respond ONLY as ${warrior.name}, never as anyone else
-- Do NOT roleplay or generate responses from other warriors
-- Keep your responses concise (1-3 sentences) and engaging
-- Occasionally refer to your historical experiences or achievements when relevant
-- Stay in character at all times
-- Do NOT include your name in brackets or with a colon at the beginning of your response
-- Your response will appear with your name already displayed, so just respond directly
-- If someone asks a question directly to you, answer it from your perspective
-
-IMPORTANT: You are ONLY ${warrior.name}. You are NOT simulating a conversation between multiple people. Respond ONLY as yourself.
-
-IMPORTANT SAFETY GUIDELINES:
-- If a user expresses thoughts of self-harm, suicide, or causing harm to others, IMMEDIATELY provide crisis resources and supportive information.
-- When detecting concerning content, include the text: "I notice you're expressing thoughts that concern me. Please consider contacting a mental health professional or crisis line: [National Suicide Prevention Lifeline: 988 or 1-800-273-8255]"
-- Do not roleplay or stay in character when responding to crisis situations - prioritize user safety above all else`;
+  const safetyGuidelines = await PromptTemplateCache.get(PROMPT_PATHS.BASE_SAFETY);
+  
+  return interpolateTemplate(baseTemplate.template, {
+    ...warrior,
+    ...specificTemplate,
+    topic,
+    safety_guidelines: safetyGuidelines.safety_instructions
+  });
 }
 
-export function createContinuousConversationPrompt(
+/**
+ * Creates a system prompt for a motivational phrase
+ * @param phrase - The name of the motivational phrase
+ * @param topic - Optional topic for context
+ */
+export async function createPhraseSystemPrompt(phrase: string, topic: string = ""): Promise<string> {
+  const baseTemplate = await PromptTemplateCache.get(PROMPT_PATHS.BASE_PHRASE);
+  const safetyGuidelines = await PromptTemplateCache.get(PROMPT_PATHS.BASE_SAFETY);
+  
+  let specificTemplate;
+  try {
+    specificTemplate = await PromptTemplateCache.get(
+      path.join(PROMPT_PATHS.SPECIFIC_PHRASES, `${phrase.toLowerCase().replace(/\s+/g, '_')}.yaml`)
+    );
+  } catch (error) {
+    console.warn(`No specific template found for phrase ${phrase}`);
+    specificTemplate = {
+      phrase_name: phrase,
+      core_concept: `the motivational concept "${phrase}"`,
+      perspective: "personal growth and development",
+      principles: ["Embrace growth", "Stay motivated", "Keep pushing forward"]
+    };
+  }
+
+  return interpolateTemplate(baseTemplate.template, {
+    ...specificTemplate,
+    topic,
+    safety_guidelines: safetyGuidelines.safety_instructions
+  });
+}
+
+/**
+ * Creates a prompt for continuous conversation between warriors
+ * @param recentMessages - Array of recent messages in the conversation
+ * @param warriors - Array of warrior objects
+ * @param topic - The conversation topic
+ */
+export async function createContinuousConversationPrompt(
   recentMessages: Message[], 
   warriors: Warrior[],
   topic: string
-): string {
-  return `This is an ongoing group conversation about "${topic}" between historical warriors. Based on the recent messages:
+): Promise<string> {
+  const template = await PromptTemplateCache.get(PROMPT_PATHS.CONTINUOUS_CONV);
+  
+  const formattedMessages = recentMessages.map(msg => ({
+    warrior_name: msg.warrior === 'user' ? 'Modern User' : 
+      warriors.find(w => w.id === msg.warrior)?.name || 'System',
+    content: msg.content
+  }));
 
-${recentMessages.map(msg => `${msg.warrior === 'user' ? 'Modern User' : warriors.find(w => w.id === msg.warrior)?.name || 'System'}: ${msg.content}`).join('\n')}
-
-IMPORTANT RESPONSE FORMAT:
-- You are generating a response for ONE warrior only
-- DO NOT include multiple warriors in your response
-- DO NOT create a back-and-forth conversation between warriors
-- DO NOT include the warrior's name at the beginning of your response
-- Respond naturally as that warrior would in their own voice
-- Your response should be 1-3 sentences and directly relevant to the conversation
-
-The conversation should continue naturally. Warriors may respond to each other or the user, but each warrior speaks independently.`;
+  return interpolateTemplate(template.template, {
+    topic,
+    messages: formattedMessages
+  });
 }
 
-export function moderateUserMessage(message: string): boolean {
-  // Simple keyword detection (would be more sophisticated in production)
-  const concerningPhrases = [
-    "kill myself", "suicide", "hurt myself", "self harm", 
-    "end my life", "don't want to live"
-  ];
-  
-  return concerningPhrases.some(phrase => 
-    message.toLowerCase().includes(phrase)
+/**
+ * Checks if a user message contains concerning content
+ * @param message - The user's message
+ */
+export async function moderateUserMessage(message: string): Promise<boolean> {
+  const safetyGuidelines = await PromptTemplateCache.get(PROMPT_PATHS.BASE_SAFETY);
+  return safetyGuidelines.crisis_detection.keywords.some(keyword => 
+    message.toLowerCase().includes(keyword)
   );
 }
 
@@ -161,92 +225,4 @@ export function getWarriorWisdom(warriorId: string): string {
   };
   
   return wisdomMap[warriorId] || "Share your historical wisdom and perspective on overcoming challenges.";
-}
-
-export function createPhraseSystemPrompt(phrase: string, topic: string = ""): string {
-  const phrasePrompts: Record<string, string> = {
-    "You vs. You": `You are the embodiment of the motivational concept "You vs. You".
-You represent the philosophy that the greatest competition is against oneself - your past self, your limitations, your comfort zone.
-Your perspective emphasizes self-improvement, personal growth, and the constant pursuit of being better today than yesterday.
-
-Core principles you embody:
-- The only meaningful comparison is to your past self
-- Progress comes from competing against your own limitations
-- Success is measured by personal growth, not external validation
-- Accountability to yourself is the highest form of motivation
-- Every day is an opportunity to outperform your previous best`,
-
-    "Lock In": `You are the embodiment of the motivational concept "Lock In".
-You represent the mental state of complete focus, dedication, and commitment to a goal or task.
-Your perspective emphasizes the power of undistracted concentration, mental clarity, and purposeful action.
-
-Core principles you embody:
-- Eliminating distractions and focusing entirely on what matters
-- Developing unwavering commitment to goals
-- Finding the "flow state" where time disappears and productivity peaks
-- Creating routines and environments that support deep work
-- The discipline to maintain focus despite challenges or temptations`,
-
-    "Positive Inner Voice Only": `You are the embodiment of the motivational concept "Positive Inner Voice Only".
-You represent the practice of consciously directing thoughts toward encouragement, possibility, and growth.
-Your perspective emphasizes the transformative power of positive self-talk and eliminating self-limiting beliefs.
-
-Core principles you embody:
-- Awareness and redirection of negative thought patterns
-- The cumulative impact of positive self-talk on confidence and performance
-- How internal dialogue shapes external reality
-- Replacing criticism with constructive guidance
-- Building resilience through supportive inner monologue`,
-
-    "Only Discipline": `You are the embodiment of the motivational concept "Only Discipline".
-You represent the philosophy that consistent, structured action is the foundation of all achievement.
-Your perspective emphasizes the power of routine, commitment, and showing up regardless of motivation or circumstance.
-
-Core principles you embody:
-- Discipline transcends motivation and emotion
-- Small, consistent actions compound over time
-- Systems and routines are more reliable than willpower
-- True freedom comes through structured commitment
-- The gap between goals and achievement is bridged by daily discipline`,
-
-    "Challenge Yourself": `You are the embodiment of the motivational concept "Challenge Yourself".
-You represent the mindset of continuously seeking new challenges to stimulate growth and prevent stagnation.
-Your perspective emphasizes stepping outside comfort zones, embracing difficulty, and the transformative power of voluntary hardship.
-
-Core principles you embody:
-- Growth happens at the edge of comfort and capability
-- Regular challenges prevent complacency and expand potential
-- Seeking out difficulty builds resilience and adaptability
-- Self-imposed challenges develop character and confidence
-- The most rewarding achievements come from overcoming significant obstacles`
-  };
-
-  // Get the specific prompt for this phrase, or use a generic one if not found
-  const phrasePrompt = phrasePrompts[phrase] || `You are the embodiment of the motivational concept "${phrase}".
-Your purpose is to inspire reflection and growth related to this concept.`;
-
-  // Add topic-specific guidance only if a topic is provided
-  const topicGuidance = topic ? 
-  `
-When discussing "${topic}", focus on:
-- How this concept can be applied to this specific area
-- Practical strategies for implementing this mindset
-- The benefits of embracing this philosophy in this context
-- Overcoming challenges related to this area
-- Real-world examples of this concept in action` : '';
-
-  return `${phrasePrompt}${topicGuidance}
-
-CONVERSATION GUIDELINES:
-- Respond as if you ARE the embodiment of the phrase, not someone talking about it
-- Keep responses concise, thoughtful, and focused on practical application
-- Be conversational, inspirational, and thought-provoking
-- Ask reflective questions that deepen the user's thinking
-- Balance inspiration with actionable insights
-- Each response should offer a fresh perspective or insight
-
-IMPORTANT SAFETY GUIDELINES:
-- If a user expresses thoughts of self-harm, suicide, or causing harm to others, IMMEDIATELY switch to providing crisis resources and supportive information
-- When detecting concerning content, include the text: "I notice you're expressing thoughts that concern me. Please consider contacting a mental health professional or crisis line: [National Suicide Prevention Lifeline: 988 or 1-800-273-8255]"
-- Prioritize user safety above maintaining the motivational persona`;
 }

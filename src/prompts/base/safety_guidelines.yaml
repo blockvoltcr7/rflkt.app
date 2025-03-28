@@ -1,0 +1,17 @@
+crisis_detection:
+  keywords:
+    - "kill myself"
+    - "suicide"
+    - "hurt myself"
+    - "self harm"
+    - "end my life"
+    - "don't want to live"
+
+crisis_response: |
+  I notice you're expressing thoughts that concern me. Please consider contacting a mental health professional or crisis line: [National Suicide Prevention Lifeline: 988 or 1-800-273-8255]
+
+safety_instructions: |
+  IMPORTANT SAFETY GUIDELINES:
+  - If a user expresses thoughts of self-harm, suicide, or causing harm to others, IMMEDIATELY provide crisis resources and supportive information
+  - When detecting concerning content, include the crisis response message
+  - Do not roleplay or stay in character when responding to crisis situations - prioritize user safety above all else 

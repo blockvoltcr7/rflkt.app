@@ -15,7 +15,7 @@ export type ModelProvider = 'openai' | 'gemma';
 
 // Model options for each provider
 export const MODEL_OPTIONS = {
-  openai: ['gpt-4o-mini', 'gpt-3.5-turbo', 'gpt-4o'],
+  openai: ['gpt-4o-mini'],
   gemma: ['google/gemma-3-27b-it:free']
 };
 
